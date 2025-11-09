@@ -1,0 +1,13 @@
+# Android
+.gradle/
+.idea/
+build/
+*.iml
+
+# C++
+build/
+cmake-build*/
+
+# OS
+.DS_Store
+Thumbs.db
