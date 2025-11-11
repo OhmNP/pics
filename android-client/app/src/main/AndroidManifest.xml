@@ -17,9 +17,8 @@
         android:theme="@style/Theme.Pics"
         tools:targetApi="31">
         <service
-            android:name=".SyncService.kt"
-            android:enabled="true"
-            android:exported="true"></service>
+            android:name=".service.SyncService"
+            android:exported="false"></service>
 
         <activity
             android:name=".MainActivity"
