@@ -1,0 +1,67 @@
+#include "ConnectionManager.h"
+
+ConnectionManager &ConnectionManager::getInstance() {
+  static ConnectionManager instance;
+  return instance;
+}
+
+void ConnectionManager::addConnection(int sessionId,
+                                      const std::string &deviceId,
+                                      const std::string &ipAddress) {
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  ConnectionInfo info;
+  info.sessionId = sessionId;
+  info.deviceId = deviceId;
+  info.ipAddress = ipAddress;
+  info.connectedAt = std::chrono::system_clock::now();
+  info.status = "handshake";
+  info.photosUploaded = 0;
+  info.bytesTransferred = 0;
+  info.lastActivity = std::chrono::system_clock::now();
+
+  connections_[sessionId] = info;
+}
+
+void ConnectionManager::removeConnection(int sessionId) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  connections_.erase(sessionId);
+}
+
+void ConnectionManager::updateStatus(int sessionId, const std::string &status) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = connections_.find(sessionId);
+  if (it != connections_.end()) {
+    it->second.status = status;
+    it->second.lastActivity = std::chrono::system_clock::now();
+  }
+}
+
+void ConnectionManager::updateProgress(int sessionId, int photosUploaded,
+                                       long long bytesTransferred) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = connections_.find(sessionId);
+  if (it != connections_.end()) {
+    it->second.photosUploaded = photosUploaded;
+    it->second.bytesTransferred = bytesTransferred;
+    it->second.lastActivity = std::chrono::system_clock::now();
+  }
+}
+
+void ConnectionManager::updateActivity(int sessionId) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = connections_.find(sessionId);
+  if (it != connections_.end()) {
+    it->second.lastActivity = std::chrono::system_clock::now();
+  }
+}
+
+std::map<int, ConnectionInfo> ConnectionManager::getActiveConnections() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return connections_;
+}
+
+int ConnectionManager::getActiveCount() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return static_cast<int>(connections_.size());
+}
