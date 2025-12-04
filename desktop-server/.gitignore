@@ -1,0 +1,26 @@
+# Build artifacts
+build/
+*.exe
+*.dll
+*.obj
+*.lib
+*.pdb
+*.ilk
+
+# Logs
+*.log
+
+# Database
+*.db
+photosync.db
+
+# Storage
+storage/
+
+# Backups
+*.backup
+
+# IDE and OS
+.vscode/
+.DS_Store
+thumbs.db
