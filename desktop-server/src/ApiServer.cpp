@@ -13,6 +13,31 @@ using json = nlohmann::json;
 static crow::SimpleApp *g_app = nullptr;
 static std::thread *g_apiThread = nullptr;
 
+// Global UI path - detected at runtime
+static std::string g_uiPath;
+
+// Detect the correct UI path based on available directories
+static std::string detectUIPath() {
+  // Priority order: installed location, dev build, dev source
+  std::vector<std::string> possiblePaths = {
+      "./web/renderer/",               // Installed location
+      "./ui-dashboard/dist/renderer/", // Development build
+      "./ui-dashboard/"                // Development source
+  };
+
+  for (const auto &path : possiblePaths) {
+    std::string testFile = path + "index.html";
+    std::ifstream test(testFile);
+    if (test.good()) {
+      LOG_INFO("Using UI path: " + path);
+      return path;
+    }
+  }
+
+  LOG_WARN("No valid UI path found, defaulting to ./web/renderer/");
+  return "./web/renderer/";
+}
+
 ApiServer::ApiServer(DatabaseManager &db, ConfigManager &config)
     : db_(db), config_(config), running_(false) {}
 
@@ -25,6 +50,9 @@ void ApiServer::start(int port) {
   }
 
   LOG_INFO("Starting API server on port " + std::to_string(port));
+
+  // Detect UI path before setting up routes
+  g_uiPath = detectUIPath();
 
   g_app = new crow::SimpleApp();
   g_app->loglevel(crow::LogLevel::Warning);
@@ -164,9 +192,11 @@ void ApiServer::setupRoutes() {
   // Explicit route for root path
   CROW_ROUTE((*g_app), "/")
   ([]() {
-    std::ifstream file("./ui-dashboard/index.html", std::ios::binary);
+    std::string indexPath = g_uiPath + "index.html";
+    std::ifstream file(indexPath, std::ios::binary);
     if (!file) {
-      return crow::response(404, "Not found");
+      LOG_ERROR("Failed to load index.html from: " + indexPath);
+      return crow::response(404, "UI Dashboard not found");
     }
     std::string content((std::istreambuf_iterator<char>(file)),
                         std::istreambuf_iterator<char>());
@@ -184,22 +214,27 @@ void ApiServer::setupRoutes() {
       path = "index.html";
     }
 
-    // Build file path
-    std::string file_path = "./ui-dashboard/" + path;
+    // Build file path using detected UI path
+    std::string file_path = g_uiPath + path;
 
     // Try to open file
     std::ifstream file(file_path, std::ios::binary);
     if (!file) {
-      // For SPA routing, serve index.html for non-API routes
+      // For SPA routing, serve index.html for non-API, non-assets routes
       if (path.find("api/") != 0 && path.find("assets/") != 0) {
-        file.open("./ui-dashboard/index.html", std::ios::binary);
-        if (!file) {
-          return crow::response(404, "Not found");
+        std::string indexPath = g_uiPath + "index.html";
+        std::ifstream indexFile(indexPath, std::ios::binary);
+        if (indexFile) {
+          std::string content((std::istreambuf_iterator<char>(indexFile)),
+                              std::istreambuf_iterator<char>());
+          indexFile.close();
+          auto res = crow::response(content);
+          res.add_header("Content-Type", "text/html");
+          return res;
         }
-        path = "index.html";
-      } else {
-        return crow::response(404, "Not found");
       }
+      LOG_WARN("File not found: " + file_path);
+      return crow::response(404, "Not found");
     }
 
     // Read file content
