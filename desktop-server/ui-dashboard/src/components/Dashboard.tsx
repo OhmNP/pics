@@ -58,20 +58,19 @@ function formatUptime(seconds: number): string {
 
 export default function Dashboard() {
     const [stats, setStats] = useState<ServerStats | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+    const [connectionStatus, setConnectionStatus] = useState<'connected' | 'connecting' | 'offline'>('connecting');
+    const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
     useEffect(() => {
         const fetchStats = async () => {
             try {
                 const response = await api.getStats();
                 setStats(response.data);
-                setError(null);
+                setConnectionStatus('connected');
+                setLastUpdated(new Date());
             } catch (err) {
-                setError('Failed to fetch server statistics');
                 console.error('Error fetching stats:', err);
-            } finally {
-                setLoading(false);
+                setConnectionStatus('offline');
             }
         };
 
@@ -81,7 +80,7 @@ export default function Dashboard() {
         return () => clearInterval(interval);
     }, []);
 
-    if (loading) {
+    if (connectionStatus === 'connecting' && !stats) {
         return (
             <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
                 <CircularProgress />
@@ -89,15 +88,7 @@ export default function Dashboard() {
         );
     }
 
-    if (error || !stats) {
-        return (
-            <Box p={3}>
-                <Typography color="error">{error || 'Failed to load data'}</Typography>
-            </Box>
-        );
-    }
-
-    const storagePercentage = ((stats.storageUsed / stats.storageLimit) * 100).toFixed(1);
+    const storagePercentage = stats ? ((stats.storageUsed / stats.storageLimit) * 100).toFixed(1) : '0';
 
     return (
         <Box p={3}>
@@ -106,7 +97,7 @@ export default function Dashboard() {
                     PhotoSync Server Dashboard
                 </Typography>
                 <Box display="flex" alignItems="center" gap={1}>
-                    {stats.serverStatus === 'running' && (
+                    {connectionStatus === 'connected' && (
                         <>
                             <CheckCircleIcon sx={{ color: '#10b981' }} />
                             <Typography color="#10b981" fontWeight={500}>
@@ -114,69 +105,108 @@ export default function Dashboard() {
                             </Typography>
                         </>
                     )}
+                    {connectionStatus === 'connecting' && (
+                        <>
+                            <CircularProgress size={20} sx={{ color: '#f59e0b' }} />
+                            <Typography color="#f59e0b" fontWeight={500}>
+                                Connecting...
+                            </Typography>
+                        </>
+                    )}
+                    {connectionStatus === 'offline' && (
+                        <>
+                            <Box
+                                sx={{
+                                    width: 12,
+                                    height: 12,
+                                    borderRadius: '50%',
+                                    bgcolor: '#ef4444',
+                                    boxShadow: '0 0 0 4px rgba(239, 68, 68, 0.2)',
+                                }}
+                            />
+                            <Box>
+                                <Typography color="#ef4444" fontWeight={500}>
+                                    Offline
+                                </Typography>
+                                {lastUpdated && (
+                                    <Typography variant="caption" color="text.secondary" display="block">
+                                        Last seen: {lastUpdated.toLocaleTimeString()}
+                                    </Typography>
+                                )}
+                            </Box>
+                        </>
+                    )}
                 </Box>
             </Box>
 
             {/* Live Connections */}
-            <LiveConnections />
+            {stats && <LiveConnections />}
 
-            <Grid container spacing={3}>
-                {/* Row 1 */}
-                <Grid item xs={12} sm={6} md={4}>
-                    <StatCard
-                        title="Total Photos"
-                        value={stats.totalPhotos.toLocaleString()}
-                        icon={<PhotoCameraIcon fontSize="inherit" />}
-                        color="#00d9ff"
-                    />
-                </Grid>
+            {stats ? (
+                <Grid container spacing={3}>
+                    {/* Row 1 */}
+                    <Grid item xs={12} sm={6} md={4}>
+                        <StatCard
+                            title="Total Photos"
+                            value={stats.totalPhotos.toLocaleString()}
+                            icon={<PhotoCameraIcon fontSize="inherit" />}
+                            color="#00d9ff"
+                        />
+                    </Grid>
 
-                <Grid item xs={12} sm={6} md={4}>
-                    <StatCard
-                        title="Connected Clients"
-                        value={stats.connectedClients}
-                        icon={<PeopleIcon fontSize="inherit" />}
-                        color="#8b5cf6"
-                    />
-                </Grid>
+                    <Grid item xs={12} sm={6} md={4}>
+                        <StatCard
+                            title="Connected Clients"
+                            value={stats.connectedClients}
+                            icon={<PeopleIcon fontSize="inherit" />}
+                            color="#8b5cf6"
+                        />
+                    </Grid>
 
-                <Grid item xs={12} sm={6} md={4}>
-                    <StatCard
-                        title="Synced Photos"
-                        value={stats.totalPhotos.toLocaleString()}
-                        icon={<PhotoCameraIcon fontSize="inherit" />}
-                        color="#10b981"
-                    />
-                </Grid>
+                    <Grid item xs={12} sm={6} md={4}>
+                        <StatCard
+                            title="Synced Photos"
+                            value={stats.totalPhotos.toLocaleString()}
+                            icon={<PhotoCameraIcon fontSize="inherit" />}
+                            color="#10b981"
+                        />
+                    </Grid>
 
-                {/* Row 2 */}
-                <Grid item xs={12} sm={6} md={4}>
-                    <StatCard
-                        title="Storage Used"
-                        value={`${formatBytes(stats.storageUsed)} (${storagePercentage}%)`}
-                        icon={<StorageIcon fontSize="inherit" />}
-                        color="#f59e0b"
-                    />
-                </Grid>
+                    {/* Row 2 */}
+                    <Grid item xs={12} sm={6} md={4}>
+                        <StatCard
+                            title="Storage Used"
+                            value={`${formatBytes(stats.storageUsed)} (${storagePercentage}%)`}
+                            icon={<StorageIcon fontSize="inherit" />}
+                            color="#f59e0b"
+                        />
+                    </Grid>
 
-                <Grid item xs={12} sm={6} md={4}>
-                    <StatCard
-                        title="Completed Sessions"
-                        value={stats.totalSessions}
-                        icon={<SyncIcon fontSize="inherit" />}
-                        color="#06b6d4"
-                    />
-                </Grid>
+                    <Grid item xs={12} sm={6} md={4}>
+                        <StatCard
+                            title="Completed Sessions"
+                            value={stats.totalSessions}
+                            icon={<SyncIcon fontSize="inherit" />}
+                            color="#06b6d4"
+                        />
+                    </Grid>
 
-                <Grid item xs={12} sm={6} md={4}>
-                    <StatCard
-                        title="Uptime"
-                        value={formatUptime(stats.uptime)}
-                        icon={<AccessTimeIcon fontSize="inherit" />}
-                        color="#ec4899"
-                    />
+                    <Grid item xs={12} sm={6} md={4}>
+                        <StatCard
+                            title="Uptime"
+                            value={formatUptime(stats.uptime)}
+                            icon={<AccessTimeIcon fontSize="inherit" />}
+                            color="#ec4899"
+                        />
+                    </Grid>
                 </Grid>
-            </Grid>
+            ) : (
+                <Box mt={4} textAlign="center">
+                    <Typography color="text.secondary">
+                        Server is offline. Waiting for connection...
+                    </Typography>
+                </Box>
+            )}
 
             {/* Recent Activity Section (Mock data for now) */}
             <Box mt={4}>
