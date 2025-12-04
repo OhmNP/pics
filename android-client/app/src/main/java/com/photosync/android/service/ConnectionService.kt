@@ -114,6 +114,9 @@ class ConnectionService : Service() {
         val serverPort = settings.serverPort
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "android_device"
         
+        val connMgr = ConnectionManager.getInstance()
+        connMgr.setConnecting()
+        
         Log.i(TAG, "Attempting to connect to $serverIp:$serverPort")
         updateNotification("Connecting to $serverIp:$serverPort...", false)
         
@@ -131,6 +134,7 @@ class ConnectionService : Service() {
             if (!response.startsWith("SESSION_START")) {
                 Log.e(TAG, "Handshake failed: $response")
                 socket.close()
+                connMgr.setError("Handshake failed")
                 scheduleReconnect()
                 return
             }
@@ -138,8 +142,8 @@ class ConnectionService : Service() {
             Log.i(TAG, "Connected successfully: $response")
             reconnectAttempts = 0
             
-            // Store connection in ConnectionManager
-            ConnectionManager.getInstance().setConnection(socket, reader, writer)
+            // Store connection in ConnectionManager (this also sets status to Connected)
+            connMgr.setConnection(socket, reader, writer)
             
             updateNotification("Connected to server", true)
             
@@ -149,7 +153,7 @@ class ConnectionService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "Connection error", e)
             updateNotification("Connection failed: ${e.message}", false)
-            ConnectionManager.getInstance().clearConnection()
+            connMgr.setError(e.message ?: "Unknown error")
             scheduleReconnect()
         } finally {
             isConnecting = false

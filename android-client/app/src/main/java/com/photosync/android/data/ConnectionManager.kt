@@ -1,5 +1,9 @@
 package com.photosync.android.data
 
+import com.photosync.android.model.ConnectionStatus
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.net.Socket
@@ -13,6 +17,9 @@ data class ConnectionInfo(
 class ConnectionManager private constructor() {
     private var connection: ConnectionInfo? = null
     private val lock = Any()
+    
+    private val _connectionStatus = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Disconnected)
+    val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
     
     companion object {
         @Volatile
@@ -28,6 +35,7 @@ class ConnectionManager private constructor() {
     fun setConnection(socket: Socket, reader: BufferedReader, writer: BufferedWriter) {
         synchronized(lock) {
             connection = ConnectionInfo(socket, reader, writer)
+            _connectionStatus.value = ConnectionStatus.Connected
         }
     }
     
@@ -40,7 +48,16 @@ class ConnectionManager private constructor() {
     fun clearConnection() {
         synchronized(lock) {
             connection = null
+            _connectionStatus.value = ConnectionStatus.Disconnected
         }
+    }
+    
+    fun setConnecting() {
+        _connectionStatus.value = ConnectionStatus.Connecting
+    }
+    
+    fun setError(message: String) {
+        _connectionStatus.value = ConnectionStatus.Error(message)
     }
     
     fun isConnected(): Boolean {

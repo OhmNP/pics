@@ -33,8 +33,10 @@ class SyncService : Service() {
         val db = LocalDB(applicationContext)
         val scanner = MediaScanner(applicationContext, db)
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "android_device"
+        val syncRepo = com.photosync.android.repository.SyncRepository.getInstance(applicationContext)
         
         Log.i(TAG, "Starting sync for device: $deviceId")
+        syncRepo.startSync()
         
         // Get existing connection from ConnectionManager
         val connMgr = ConnectionManager.getInstance()
@@ -42,6 +44,7 @@ class SyncService : Service() {
         
         if (conn == null || !connMgr.isConnected()) {
             Log.e(TAG, "No active connection to server. Please ensure ConnectionService is running.")
+            syncRepo.completeSyncError("No active connection to server")
             return
         }
 
@@ -52,23 +55,33 @@ class SyncService : Service() {
 
             Log.i(TAG, "Using existing connection for sync")
 
+            // First, collect all photos to get total count
+            val allPhotos = scanner.scanIncremental().toList()
+            val totalPhotos = allPhotos.size
+            var photoIndex = 0
+            var totalBytesSynced = 0L
+
             // Collect photos for batch
             var batch = mutableListOf<PhotoMeta>()
-            for (photo in scanner.scanIncremental()) {
+            for (photo in allPhotos) {
                 batch.add(photo)
                 if (batch.size >= batchSize) {
-                    processBatch(batch, reader, writer, outputStream)
+                    val bytesSynced = processBatch(batch, reader, writer, outputStream, photoIndex, totalPhotos, syncRepo)
+                    totalBytesSynced += bytesSynced
+                    photoIndex += batch.size
                     batch.clear()
                 }
             }
             if (batch.isNotEmpty()) {
-                processBatch(batch, reader, writer, outputStream)
+                val bytesSynced = processBatch(batch, reader, writer, outputStream, photoIndex, totalPhotos, syncRepo)
+                totalBytesSynced += bytesSynced
             }
             
-            db.setLastSync(System.currentTimeMillis())
+            syncRepo.completeSyncSuccess(totalPhotos, totalBytesSynced)
             Log.i(TAG, "Sync completed successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Sync error", e)
+            syncRepo.completeSyncError(e.message ?: "Unknown error")
             throw e
         }
     }
@@ -77,17 +90,25 @@ class SyncService : Service() {
         batch: List<PhotoMeta>,
         reader: BufferedReader,
         writer: BufferedWriter,
-        outputStream: OutputStream
-    ) {
+        outputStream: OutputStream,
+        startIndex: Int,
+        totalPhotos: Int,
+        syncRepo: com.photosync.android.repository.SyncRepository
+    ): Long {
+        var batchBytesSynced = 0L
+        
         // Start Batch
         writeCommand(writer, "BEGIN_BATCH ${batch.size}")
         val batchAck = readResponse(reader)
         if (batchAck != "ACK READY") {
             Log.e(TAG, "Batch start failed: $batchAck")
-            return
+            return 0L
         }
 
-        for (photo in batch) {
+        batch.forEachIndexed { index, photo ->
+            val currentIndex = startIndex + index + 1
+            syncRepo.updateCurrentFile(photo.name, currentIndex, totalPhotos)
+            
             // Send Metadata
             writeCommand(writer, "PHOTO ${photo.name} ${photo.size} ${photo.hash}")
             val response = readResponse(reader)
@@ -99,7 +120,8 @@ class SyncService : Service() {
                 }
                 
                 Log.d(TAG, "Uploading ${photo.name} from offset $offset")
-                uploadFile(photo, offset, writer, outputStream, reader)
+                val bytesUploaded = uploadFile(photo, offset, writer, outputStream, reader)
+                batchBytesSynced += bytesUploaded
             } else if (response == "SKIP") {
                 Log.d(TAG, "Skipping ${photo.name} (already exists)")
             } else {
@@ -110,6 +132,8 @@ class SyncService : Service() {
         // End Batch
         writeCommand(writer, "BATCH_END")
         readResponse(reader) // Expect ACK
+        
+        return batchBytesSynced
     }
 
     private fun uploadFile(
@@ -118,20 +142,21 @@ class SyncService : Service() {
         writer: BufferedWriter,
         outputStream: OutputStream,
         reader: BufferedReader
-    ) {
-        val fileStream = contentResolver.openInputStream(photo.uri) ?: return
+    ): Long {
+        val fileStream = contentResolver.openInputStream(photo.uri) ?: return 0L
         val fileSize = photo.size
         val uploadSize = fileSize - offset
 
         if (uploadSize <= 0) {
             Log.w(TAG, "Invalid upload size: $uploadSize")
-            return
+            return 0L
         }
 
         // Send DATA command
         writeCommand(writer, "DATA_TRANSFER $uploadSize")
 
         // Send binary data
+        var totalSent = 0L
         fileStream.use { input ->
             if (offset > 0) {
                 input.skip(offset)
@@ -139,7 +164,6 @@ class SyncService : Service() {
             
             val buffer = ByteArray(8192)
             var bytesRead: Int
-            var totalSent: Long = 0
             
             while (input.read(buffer).also { bytesRead = it } != -1) {
                 outputStream.write(buffer, 0, bytesRead)
@@ -153,6 +177,8 @@ class SyncService : Service() {
         if (ack != "ACK") {
             Log.e(TAG, "Upload failed for ${photo.name}: $ack")
         }
+        
+        return totalSent
     }
 
     private fun writeCommand(writer: BufferedWriter, command: String) {
