@@ -8,7 +8,6 @@ import android.util.Log
 import com.photosync.android.data.*
 import kotlinx.coroutines.*
 import java.io.*
-import java.net.Socket
 import java.nio.charset.StandardCharsets
 
 class SyncService : Service() {
@@ -36,45 +35,40 @@ class SyncService : Service() {
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "android_device"
         
         Log.i(TAG, "Starting sync for device: $deviceId")
-        Log.i(TAG, "Connecting to $serverIp:$serverPort")
+        
+        // Get existing connection from ConnectionManager
+        val connMgr = ConnectionManager.getInstance()
+        val conn = connMgr.getConnection()
+        
+        if (conn == null || !connMgr.isConnected()) {
+            Log.e(TAG, "No active connection to server. Please ensure ConnectionService is running.")
+            return
+        }
 
         try {
-            Socket(serverIp, serverPort).use { socket ->
-                val reader = BufferedReader(InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))
-                val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8))
-                val outputStream = socket.getOutputStream() // For binary data
+            val reader = conn.reader
+            val writer = conn.writer
+            val outputStream = conn.socket.getOutputStream() // For binary data
 
-                // 1. Handshake
-                writeCommand(writer, "HELLO $deviceId")
-                val sessionResponse = readResponse(reader)
-                if (!sessionResponse.startsWith("SESSION_START")) {
-                    Log.e(TAG, "Handshake failed: $sessionResponse")
-                    return
-                }
-                Log.i(TAG, "Session started: $sessionResponse")
+            Log.i(TAG, "Using existing connection for sync")
 
-                // Collect photos for batch
-                var batch = mutableListOf<PhotoMeta>()
-                for (photo in scanner.scanIncremental()) {
-                    batch.add(photo)
-                    if (batch.size >= batchSize) {
-                        processBatch(batch, reader, writer, outputStream)
-                        batch.clear()
-                    }
-                }
-                if (batch.isNotEmpty()) {
+            // Collect photos for batch
+            var batch = mutableListOf<PhotoMeta>()
+            for (photo in scanner.scanIncremental()) {
+                batch.add(photo)
+                if (batch.size >= batchSize) {
                     processBatch(batch, reader, writer, outputStream)
+                    batch.clear()
                 }
-
-                // End Session
-                writeCommand(writer, "SESSION_END")
-                readResponse(reader) // Expect ACK
-                
-                db.setLastSync(System.currentTimeMillis())
-                Log.i(TAG, "Sync completed successfully")
             }
+            if (batch.isNotEmpty()) {
+                processBatch(batch, reader, writer, outputStream)
+            }
+            
+            db.setLastSync(System.currentTimeMillis())
+            Log.i(TAG, "Sync completed successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Connection error", e)
+            Log.e(TAG, "Sync error", e)
             throw e
         }
     }
@@ -86,7 +80,7 @@ class SyncService : Service() {
         outputStream: OutputStream
     ) {
         // Start Batch
-        writeCommand(writer, "BATCH_START ${batch.size}")
+        writeCommand(writer, "BEGIN_BATCH ${batch.size}")
         val batchAck = readResponse(reader)
         if (batchAck != "ACK READY") {
             Log.e(TAG, "Batch start failed: $batchAck")

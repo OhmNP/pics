@@ -99,6 +99,19 @@ fun SettingsScreen(
 ) {
     var serverIp by remember { mutableStateOf(settings.serverIp) }
     var serverPort by remember { mutableStateOf(settings.serverPort.toString()) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    
+    // Auto-start connection service if settings are valid
+    LaunchedEffect(Unit) {
+        if (settings.serverIp.isNotBlank()) {
+            val intent = Intent(context, com.photosync.android.service.ConnectionService::class.java)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+    }
     
     Column(
         modifier = Modifier
@@ -136,11 +149,21 @@ fun SettingsScreen(
                 if (serverIp.isNotBlank() && port != null && port in 1..65535) {
                     settings.serverIp = serverIp
                     settings.serverPort = port
+                    
+                    // Restart connection service with new settings
+                    val intent = Intent(context, com.photosync.android.service.ConnectionService::class.java)
+                    context.stopService(intent)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
+                    Toast.makeText(context, "Settings saved & reconnecting...", Toast.LENGTH_SHORT).show()
                 }
             },
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Save Settings")
+            Text("Save & Connect")
         }
         
         Divider(modifier = Modifier.padding(vertical = 8.dp))
