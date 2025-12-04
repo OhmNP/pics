@@ -56,11 +56,12 @@ public:
     std::cout << "SENT: [Binary Data " << data.size() << " bytes]" << std::endl;
   }
 
-  void runSyncSession(int numPhotos, int batchSize) {
+  void runSyncSession(int numPhotos, int batchSize,
+                      const std::string &deviceId = "mock_client") {
     std::cout << "\n=== Starting Sync Session ===" << std::endl;
 
     // Handshake
-    sendMessage("HELLO mock_client");
+    sendMessage("HELLO " + deviceId);
     std::string response = receiveMessage();
     if (response.find("SESSION_START") == std::string::npos) {
       std::cerr << "Handshake failed" << std::endl;
@@ -164,7 +165,9 @@ int main(int argc, char *argv[]) {
     desc.add_options()("help,h", "Help")(
         "host", po::value<std::string>()->default_value("localhost"),
         "Host")("port,p", po::value<int>()->default_value(50505), "Port")(
-        "photos,n", po::value<int>()->default_value(5), "Num Photos");
+        "photos,n", po::value<int>()->default_value(5), "Num Photos")(
+        "device-id,d", po::value<std::string>()->default_value("mock_client"),
+        "Device ID");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -177,7 +180,8 @@ int main(int argc, char *argv[]) {
 
     MockClient client(vm["host"].as<std::string>(), vm["port"].as<int>());
     if (client.connect()) {
-      client.runSyncSession(vm["photos"].as<int>(), 5);
+      client.runSyncSession(vm["photos"].as<int>(), 5,
+                            vm["device-id"].as<std::string>());
       client.disconnect();
     }
   } catch (std::exception &e) {

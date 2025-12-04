@@ -317,9 +317,50 @@ std::string ApiServer::handleGetPhotos(int page, int limit,
 
 std::string ApiServer::handleGetClients() {
   try {
-    // TODO: Implement getClients in DatabaseManager
-    json response = {{"clients", json::array()}};
+    auto clients = db_.getClients();
+    auto &connMgr = ConnectionManager::getInstance();
+    auto activeConnections = connMgr.getActiveConnections();
 
+    json clientsJson = json::array();
+
+    for (const auto &client : clients) {
+      bool isOnline = false;
+      json currentSession = nullptr;
+
+      // Check if client is online
+      for (const auto &[sessionId, info] : activeConnections) {
+        if (info.deviceId == client.deviceId) {
+          isOnline = true;
+
+          if (info.status == "syncing") {
+            currentSession = {
+                {"progress", info.photosUploaded}, {"total", 0}
+                // Total is not currently tracked in ConnectionInfo, would need
+                // protocol update
+            };
+          }
+          break;
+        }
+      }
+
+      json clientJson = {
+          {"id", client.id},
+          {"deviceId", client.deviceId},
+          {"name", client.deviceId}, // Use deviceId as name for now, could add
+                                     // alias later
+          {"lastSeen", client.lastSeen},
+          {"photoCount", client.photoCount},
+          {"storageUsed", client.storageUsed},
+          {"isOnline", isOnline}};
+
+      if (currentSession != nullptr) {
+        clientJson["currentSession"] = currentSession;
+      }
+
+      clientsJson.push_back(clientJson);
+    }
+
+    json response = {{"clients", clientsJson}};
     return response.dump();
   } catch (const std::exception &e) {
     LOG_ERROR("Error in handleGetClients: " + std::string(e.what()));

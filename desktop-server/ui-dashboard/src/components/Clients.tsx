@@ -45,53 +45,13 @@ export default function Clients() {
     useEffect(() => {
         const fetchClients = async () => {
             try {
-                await api.getClients();
-                // Using mock data for UI demo
-                const mockConnected: Client[] = [
-                    {
-                        id: 1,
-                        deviceId: 'pixel-7-abc123',
-                        name: 'Pixel 7',
-                        lastSeen: new Date().toISOString(),
-                        photoCount: 8432,
-                        storageUsed: 2100000000,
-                        isOnline: true,
-                        currentSession: { progress: 12, total: 45 },
-                    },
-                    {
-                        id: 2,
-                        deviceId: 'galaxy-s21-def456',
-                        name: 'Galaxy S21',
-                        lastSeen: new Date(Date.now() - 120000).toISOString(),
-                        photoCount: 5201,
-                        storageUsed: 1500000000,
-                        isOnline: true,
-                    },
-                ];
+                const response = await api.getClients();
+                const clients = response.data.clients;
 
-                const mockOffline: Client[] = [
-                    {
-                        id: 3,
-                        deviceId: 'iphone-13-ghi789',
-                        name: 'iPhone 13',
-                        lastSeen: new Date(Date.now() - 10800000).toISOString(),
-                        photoCount: 2214,
-                        storageUsed: 546000000,
-                        isOnline: false,
-                    },
-                    {
-                        id: 4,
-                        deviceId: 'oneplus-9-jkl012',
-                        name: 'OnePlus 9',
-                        lastSeen: new Date(Date.now() - 86400000).toISOString(),
-                        photoCount: 0,
-                        storageUsed: 0,
-                        isOnline: false,
-                    },
-                ];
+                const connected = clients.filter((c: Client) => c.isOnline);
 
-                setConnectedClients(mockConnected);
-                setAllClients([...mockConnected, ...mockOffline]);
+                setConnectedClients(connected);
+                setAllClients(clients);
             } catch (err) {
                 console.error('Error fetching clients:', err);
             } finally {
@@ -100,6 +60,9 @@ export default function Clients() {
         };
 
         fetchClients();
+        // Poll for updates every 5 seconds
+        const interval = setInterval(fetchClients, 5000);
+        return () => clearInterval(interval);
     }, []);
 
     const ClientCard = ({ client }: { client: Client }) => (

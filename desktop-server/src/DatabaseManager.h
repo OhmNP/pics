@@ -33,6 +33,15 @@ public:
   int getOrCreateClient(const std::string &deviceId);
   bool updateClientLastSeen(int clientId);
 
+  struct ClientRecord {
+    int id;
+    std::string deviceId;
+    std::string lastSeen;
+    int photoCount;
+    long long storageUsed;
+  };
+  std::vector<ClientRecord> getClients();
+
   // Session operations
   int createSession(int clientId);
   void updateSessionPhotosReceived(int sessionId, int photosReceived);

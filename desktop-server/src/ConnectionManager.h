@@ -5,7 +5,6 @@
 #include <mutex>
 #include <string>
 
-
 struct ConnectionInfo {
   int sessionId;
   std::string deviceId;

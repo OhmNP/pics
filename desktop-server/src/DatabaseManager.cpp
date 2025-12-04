@@ -158,6 +158,47 @@ bool DatabaseManager::updateClientLastSeen(int clientId) {
   return true;
 }
 
+std::vector<DatabaseManager::ClientRecord> DatabaseManager::getClients() {
+  std::vector<ClientRecord> clients;
+  sqlite3_stmt *stmt;
+
+  // Join clients with photos to calculate total storage used
+  const char *sql = R"(
+        SELECT 
+            c.id, 
+            c.device_id, 
+            c.last_seen, 
+            c.total_photos,
+            COALESCE(SUM(p.size), 0) as storage_used
+        FROM clients c
+        LEFT JOIN photos p ON c.id = p.client_id
+        GROUP BY c.id
+        ORDER BY c.last_seen DESC
+    )";
+
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    LOG_ERROR("Failed to prepare getClients statement: " +
+              std::string(sqlite3_errmsg(db_)));
+    return clients;
+  }
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    ClientRecord client;
+    client.id = sqlite3_column_int(stmt, 0);
+    client.deviceId =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+    client.lastSeen =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
+    client.photoCount = sqlite3_column_int(stmt, 3);
+    client.storageUsed = sqlite3_column_int64(stmt, 4);
+
+    clients.push_back(client);
+  }
+
+  sqlite3_finalize(stmt);
+  return clients;
+}
+
 int DatabaseManager::createSession(int clientId) {
   sqlite3_stmt *stmt;
   const char *sql = "INSERT INTO sync_sessions (client_id, started_at, status) "
