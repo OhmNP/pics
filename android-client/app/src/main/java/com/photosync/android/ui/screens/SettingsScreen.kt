@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -171,6 +172,66 @@ fun SettingsScreen(
             Divider(modifier = Modifier.padding(vertical = 8.dp))
             
             Text(
+                text = "Troubleshooting",
+                style = MaterialTheme.typography.titleMedium
+            )
+            
+            Button(
+                onClick = { viewModel.resetSyncHistory() },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                )
+            ) {
+                Text("Reset Sync History")
+            }
+            Text(
+                text = "Use this if photos are not syncing. It will rescan all photos.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            
+            // Debug Info Section
+            Text(
+                text = "Debug Info",
+                style = MaterialTheme.typography.titleMedium
+            )
+            
+            val lastSyncTime by viewModel.lastSyncTime.collectAsStateWithLifecycle()
+            val totalPhotos by viewModel.totalPhotos.collectAsStateWithLifecycle()
+            val pendingPhotos by viewModel.pendingPhotos.collectAsStateWithLifecycle()
+            
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    DebugRow("Last Sync Time", if (lastSyncTime > 0) java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(lastSyncTime)) else "Never (0)")
+                    DebugRow("Total Photos in Storage", totalPhotos.toString())
+                    DebugRow("Pending Sync", pendingPhotos.toString())
+                    
+                    Button(
+                        onClick = { viewModel.refreshDebugInfo() },
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text("Refresh Info")
+                    }
+                }
+            }
+            
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            
+            Text(
                 text = "About",
                 style = MaterialTheme.typography.titleMedium
             )
@@ -199,5 +260,24 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DebugRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+        )
     }
 }

@@ -60,10 +60,12 @@ class SyncRepository private constructor(context: Context) {
         )
     }
     
-    fun completeSyncSuccess(photosSynced: Int, bytesTransferred: Long) {
+    fun completeSyncSuccess(photosSynced: Int, bytesTransferred: Long, maxModifiedTime: Long? = null) {
         _syncProgress.value = SyncProgress(isActive = false)
         db.addSyncHistory(photosSynced, bytesTransferred, success = true)
-        db.setLastSync(System.currentTimeMillis())
+        if (maxModifiedTime != null && maxModifiedTime > 0) {
+            db.setLastSync(maxModifiedTime)
+        }
     }
     
     fun completeSyncError(error: String) {
@@ -81,5 +83,9 @@ class SyncRepository private constructor(context: Context) {
     
     fun getTotalPhotosSynced(): Int {
         return db.getTotalPhotosSynced()
+    }
+    
+    fun resetSync() {
+        db.setLastSync(0)
     }
 }

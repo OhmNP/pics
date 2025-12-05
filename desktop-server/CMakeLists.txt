@@ -7,15 +7,6 @@ set(CMAKE_BUILD_TYPE Debug)
 # Define Windows version for Boost.Asio
 add_definitions(-D_WIN32_WINNT=0x0601)
 
-cmake_minimum_required(VERSION 3.15)
-project(PhotoSyncServer LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_BUILD_TYPE Debug)
-
-# Define Windows version for Boost.Asio
-add_definitions(-D_WIN32_WINNT=0x0601)
-
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(SQLite3 REQUIRED)
 find_package(nlohmann_json REQUIRED)
@@ -32,6 +23,7 @@ add_executable(PhotoSyncServer
     src/ApiServer.cpp
     src/FileManager.cpp
     src/ConnectionManager.cpp
+    src/UdpBroadcaster.cpp
 )
 
 target_include_directories(PhotoSyncServer PRIVATE ${Boost_INCLUDE_DIRS} ${SQLite3_INCLUDE_DIRS} ${OPENSSL_INCLUDE_DIR})

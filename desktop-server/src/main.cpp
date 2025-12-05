@@ -4,6 +4,7 @@
 #include "FileManager.h"
 #include "Logger.h"
 #include "TcpListener.h"
+#include "UdpBroadcaster.h"
 #include <boost/asio.hpp>
 #include <csignal>
 #include <iostream>
@@ -97,6 +98,10 @@ int main(int argc, char *argv[]) {
 
     // Start TCP listener for sync protocol with FileManager
     TcpListener listener(io_context, config.getPort(), db, fileManager);
+
+    // Start UDP Broadcaster for service discovery
+    UdpBroadcaster broadcaster(io_context, config.getPort());
+    broadcaster.start();
 
     LOG_INFO("Sync server ready on port " + std::to_string(config.getPort()));
     LOG_INFO("API server ready on port 50506");

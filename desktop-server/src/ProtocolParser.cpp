@@ -37,7 +37,7 @@ ParsedCommand ProtocolParser::parse(const std::string &message) {
     if (parts.size() > 1) {
       cmd.hash = parts[1];
     }
-  } else if (command == "END_BATCH") {
+  } else if (command == "BATCH_END") {
     cmd.type = CommandType::BATCH_END;
   } else if (command == "END_SESSION") {
     cmd.type = CommandType::SESSION_END;

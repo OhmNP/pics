@@ -110,12 +110,27 @@ class ConnectionService : Service() {
     private suspend fun connectToServer() {
         isConnecting = true
         val settings = SettingsManager(this)
-        val serverIp = settings.serverIp
+        var serverIp = settings.serverIp
         val serverPort = settings.serverPort
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "android_device"
         
         val connMgr = ConnectionManager.getInstance()
         connMgr.setConnecting()
+
+        // Try discovery if IP is default or not set, or just always try discovery to be robust
+        Log.i(TAG, "Attempting discovery...")
+        updateNotification("Searching for server...", false)
+        val discoveryManager = com.photosync.android.network.DiscoveryManager()
+        val discoveredIp = discoveryManager.discoverServer()
+        
+        if (discoveredIp != null) {
+            Log.i(TAG, "Discovered server at $discoveredIp")
+            serverIp = discoveredIp
+            // Update settings so next time we have a good default
+            settings.serverIp = discoveredIp
+        } else {
+            Log.w(TAG, "Discovery failed, using stored IP: $serverIp")
+        }
         
         Log.i(TAG, "Attempting to connect to $serverIp:$serverPort")
         updateNotification("Connecting to $serverIp:$serverPort...", false)
@@ -169,6 +184,12 @@ class ConnectionService : Service() {
             // Keep connection alive by reading from server
             // Server might send commands or close connection
             while (socket.isConnected && !socket.isClosed) {
+                // Check if syncing - if so, pause reading to let SyncService handle the socket
+                if (ConnectionManager.getInstance().isSyncing.value) {
+                    delay(500)
+                    continue
+                }
+
                 // Check if there's data available (non-blocking check)
                 if (reader.ready()) {
                     val message = readResponse(reader)

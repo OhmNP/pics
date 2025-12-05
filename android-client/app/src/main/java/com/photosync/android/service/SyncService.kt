@@ -16,12 +16,24 @@ class SyncService : Service() {
     private val TAG = "SyncService"
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val serverIp = intent?.getStringExtra("server_ip") ?: "192.168.0.10"
+        // Default to intent extra or fallback
+        val defaultIp = intent?.getStringExtra("server_ip") ?: "192.168.0.10"
         val serverPort = intent?.getIntExtra("server_port", 50505) ?: 50505
         
         GlobalScope.launch(Dispatchers.IO) {
             try {
-                syncPhotos(serverIp, serverPort)
+                // Try to discover server first
+                val discoveryManager = com.photosync.android.network.DiscoveryManager()
+                val discoveredIp = discoveryManager.discoverServer()
+                
+                val targetIp = discoveredIp ?: defaultIp
+                if (discoveredIp != null) {
+                    Log.i(TAG, "Using discovered server IP: $targetIp")
+                } else {
+                    Log.w(TAG, "Discovery failed, using default IP: $targetIp")
+                }
+
+                syncPhotos(targetIp, serverPort)
             } catch (e: Exception) {
                 Log.e(TAG, "Sync failed", e)
             }
@@ -38,51 +50,86 @@ class SyncService : Service() {
         Log.i(TAG, "Starting sync for device: $deviceId")
         syncRepo.startSync()
         
-        // Get existing connection from ConnectionManager
         val connMgr = ConnectionManager.getInstance()
-        val conn = connMgr.getConnection()
         
-        if (conn == null || !connMgr.isConnected()) {
-            Log.e(TAG, "No active connection to server. Please ensure ConnectionService is running.")
-            syncRepo.completeSyncError("No active connection to server")
-            return
-        }
-
-        try {
-            val reader = conn.reader
-            val writer = conn.writer
-            val outputStream = conn.socket.getOutputStream() // For binary data
-
-            Log.i(TAG, "Using existing connection for sync")
-
-            // First, collect all photos to get total count
-            val allPhotos = scanner.scanIncremental().toList()
-            val totalPhotos = allPhotos.size
-            var photoIndex = 0
-            var totalBytesSynced = 0L
-
-            // Collect photos for batch
-            var batch = mutableListOf<PhotoMeta>()
-            for (photo in allPhotos) {
-                batch.add(photo)
-                if (batch.size >= batchSize) {
-                    val bytesSynced = processBatch(batch, reader, writer, outputStream, photoIndex, totalPhotos, syncRepo)
-                    totalBytesSynced += bytesSynced
-                    photoIndex += batch.size
-                    batch.clear()
+        while (true) {
+            // 1. Wait for connection
+            if (!connMgr.isConnected()) {
+                Log.i(TAG, "Waiting for connection to server...")
+                try {
+                    connMgr.connectionStatus.collect { status ->
+                        if (status is com.photosync.android.model.ConnectionStatus.Connected) {
+                            throw CancellationException("Connected") // Break out of collect
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    // Connected
                 }
             }
-            if (batch.isNotEmpty()) {
-                val bytesSynced = processBatch(batch, reader, writer, outputStream, photoIndex, totalPhotos, syncRepo)
-                totalBytesSynced += bytesSynced
-            }
             
-            syncRepo.completeSyncSuccess(totalPhotos, totalBytesSynced)
-            Log.i(TAG, "Sync completed successfully")
-        } catch (e: Exception) {
-            Log.e(TAG, "Sync error", e)
-            syncRepo.completeSyncError(e.message ?: "Unknown error")
-            throw e
+            val conn = connMgr.getConnection()
+            if (conn == null) {
+                delay(1000)
+                continue
+            }
+
+            // 2. Try to sync
+            connMgr.setSyncing(true)
+            
+            try {
+                val reader = conn.reader
+                val writer = conn.writer
+                val outputStream = conn.socket.getOutputStream() // For binary data
+
+                Log.i(TAG, "Using existing connection for sync")
+
+                // First, collect all photos to get total count
+                val allPhotos = scanner.scanIncremental().toList()
+                val totalPhotos = allPhotos.size
+                var photoIndex = 0
+                var totalBytesSynced = 0L
+                var maxModifiedTime = 0L
+
+                // Collect photos for batch
+                var batch = mutableListOf<PhotoMeta>()
+                for (photo in allPhotos) {
+                    batch.add(photo)
+                    // Track the latest modification time (convert seconds to millis)
+                    val photoTime = photo.modified * 1000
+                    if (photoTime > maxModifiedTime) {
+                        maxModifiedTime = photoTime
+                    }
+                    
+                    if (batch.size >= batchSize) {
+                        val bytesSynced = processBatch(batch, reader, writer, outputStream, photoIndex, totalPhotos, syncRepo)
+                        totalBytesSynced += bytesSynced
+                        photoIndex += batch.size
+                        batch.clear()
+                    }
+                }
+                if (batch.isNotEmpty()) {
+                    val bytesSynced = processBatch(batch, reader, writer, outputStream, photoIndex, totalPhotos, syncRepo)
+                    totalBytesSynced += bytesSynced
+                }
+                
+                syncRepo.completeSyncSuccess(totalPhotos, totalBytesSynced, if (totalPhotos > 0) maxModifiedTime else null)
+                Log.i(TAG, "Sync completed successfully")
+                return // Exit loop and function on success
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Sync failed, retrying in 5s...", e)
+                // Do NOT completeSyncError, just retry
+                
+                // Close connection to force reconnect if it was a socket error
+                try {
+                    conn.socket.close()
+                } catch (ignore: Exception) { }
+                
+                delay(5000)
+            } finally {
+                // Reset syncing flag
+                connMgr.setSyncing(false)
+            }
         }
     }
 
@@ -109,6 +156,24 @@ class SyncService : Service() {
             val currentIndex = startIndex + index + 1
             syncRepo.updateCurrentFile(photo.name, currentIndex, totalPhotos)
             
+            // Calculate hash on demand before sending
+            Log.d(TAG, "Calculating hash for ${photo.name}")
+            val scanner = MediaScanner(applicationContext, LocalDB(applicationContext))
+            try {
+                val hash = scanner.calculateSha256(photo.uri)
+                photo.hash = hash
+                Log.d(TAG, "Hash calculated: $hash")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to calculate hash for ${photo.name}", e)
+                // Skip this photo or fail batch?
+                // For now, let's skip sending this photo but continue batch if possible
+                // But protocol expects batch size...
+                // We must send something or fail.
+                // Let's send a dummy hash to fail on server side or handle gracefully?
+                // Better to throw and fail batch.
+                throw e
+            }
+            
             // Send Metadata
             writeCommand(writer, "PHOTO ${photo.name} ${photo.size} ${photo.hash}")
             val response = readResponse(reader)
@@ -131,8 +196,9 @@ class SyncService : Service() {
 
         // End Batch
         writeCommand(writer, "BATCH_END")
-        readResponse(reader) // Expect ACK
-        
+        val response = readResponse(reader) // Expect ACK
+        Log.e(TAG, "batch completed:  $response")
+
         return batchBytesSynced
     }
 

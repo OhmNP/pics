@@ -7,11 +7,13 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.photosync.android.data.SettingsManager
 import com.photosync.android.service.ConnectionService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
     private val settings = SettingsManager(application)
@@ -64,5 +66,40 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             Manifest.permission.READ_EXTERNAL_STORAGE
         }
         return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    }
+    
+    fun resetSyncHistory() {
+        com.photosync.android.repository.SyncRepository.getInstance(getApplication()).resetSync()
+        refreshDebugInfo()
+    }
+    
+    // Debug Info
+    private val _lastSyncTime = MutableStateFlow(0L)
+    val lastSyncTime: StateFlow<Long> = _lastSyncTime.asStateFlow()
+    
+    private val _totalPhotos = MutableStateFlow(0)
+    val totalPhotos: StateFlow<Int> = _totalPhotos.asStateFlow()
+    
+    private val _pendingPhotos = MutableStateFlow(0)
+    val pendingPhotos: StateFlow<Int> = _pendingPhotos.asStateFlow()
+    
+    init {
+        refreshDebugInfo()
+    }
+    
+    fun refreshDebugInfo() {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val db = com.photosync.android.data.LocalDB(context)
+            val syncRepo = com.photosync.android.repository.SyncRepository.getInstance(context)
+            val photoRepo = com.photosync.android.repository.PhotoRepository.getInstance(context)
+            
+            _lastSyncTime.value = syncRepo.getLastSyncTime()
+            _totalPhotos.value = photoRepo.getPhotoCount()
+            
+            // Calculate pending
+            val scanner = com.photosync.android.data.MediaScanner(context, db)
+            _pendingPhotos.value = scanner.getPendingCount()
+        }
     }
 }

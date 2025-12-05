@@ -124,7 +124,7 @@ public:
         }
       }
 
-      sendMessage("END_BATCH");
+      sendMessage("BATCH_END");
       receiveMessage(); // ACK
 
       photosSent += currentBatchSize;

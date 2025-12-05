@@ -66,4 +66,11 @@ class ConnectionManager private constructor() {
                    connection?.socket?.isClosed == false
         }
     }
+
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
+
+    fun setSyncing(syncing: Boolean) {
+        _isSyncing.value = syncing
+    }
 }

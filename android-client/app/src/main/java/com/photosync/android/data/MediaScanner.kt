@@ -11,7 +11,7 @@ import kotlinx.coroutines.withContext
 import java.io.InputStream
 import java.security.MessageDigest
 
-data class PhotoMeta(val uri: Uri, val name: String, val size: Long, val modified: Long, val hash: String)
+data class PhotoMeta(val uri: Uri, val name: String, val size: Long, val modified: Long, var hash: String)
 
 class MediaScanner(private val context: Context, private val db: LocalDB) {
 
@@ -43,22 +43,46 @@ class MediaScanner(private val context: Context, private val db: LocalDB) {
                     val size = it.getLong(sizeCol)
                     val modified = it.getLong(modCol)
                     val uri = ContentUris.withAppendedId(collection, id)
-                    val hash = calculateSha256(uri)
-                    yield(PhotoMeta(uri, name, size, modified, hash))
-                    Log.e("PhotoScan", "scanIncremental: $name, $size", )
+                    // Defer hash calculation to upload time for performance
+                    yield(PhotoMeta(uri, name, size, modified, ""))
                 }
             }
         }
     }
+    
+    suspend fun getPendingCount(): Int = withContext(Dispatchers.IO) {
+        val lastSync = db.getLastSync()
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        
+        val selection = "${MediaStore.Images.Media.DATE_MODIFIED} > ?"
+        val args = arrayOf((lastSync / 1000).toString())
 
-    private fun calculateSha256(uri: Uri): String {
+        context.contentResolver.query(
+            collection,
+            arrayOf(MediaStore.Images.Media._ID),
+            selection,
+            args,
+            null
+        )?.use { 
+            it.count 
+        } ?: 0
+    }
+
+    fun calculateSha256(uri: Uri): String {
         val md = MessageDigest.getInstance("SHA-256")
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            val buffer = ByteArray(8192)
-            var read: Int
-            while (input.read(buffer).also { read = it } > 0) {
-                md.update(buffer, 0, read)
-            }
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                val buffer = ByteArray(8192)
+                var read: Int
+                while (input.read(buffer).also { read = it } > 0) {
+                    md.update(buffer, 0, read)
+                }
+            } ?: throw java.io.IOException("Could not open input stream for $uri")
+        } catch (e: Exception) {
+            Log.e("MediaScanner", "Error calculating hash for $uri", e)
+            throw e
         }
         return md.digest().joinToString("") { "%02x".format(it) }
     }

@@ -1,8 +1,7 @@
+#include "TcpListener.h"
 #include "ConnectionManager.h"
 #include "Logger.h"
-#include "TcpListener.h"
 #include <iostream>
-
 
 // Undefine Windows macros that conflict with our enums
 #ifdef ERROR
@@ -43,7 +42,9 @@ void Session::doRead() {
             handleCommand(message);
           }
 
-          doRead(); // Continue reading
+          if (state_ != SessionState::RECEIVING_PHOTO_DATA) {
+            doRead(); // Continue reading
+          }
         } else {
           if (ec != boost::asio::error::eof) {
             LOG_ERROR("Read error: " + ec.message());
@@ -64,20 +65,42 @@ void Session::doReadBinaryData(long long dataSize) {
   // Create buffer for binary data
   auto dataBuffer = std::make_shared<std::vector<char>>(dataSize);
 
+  // Check if we have data in the buffer from previous reads
+  std::size_t bufferedDataSize = buffer_.size();
+  std::size_t bytesToRead = dataSize;
+  std::size_t bufferOffset = 0;
+
+  if (bufferedDataSize > 0) {
+    std::size_t bytesToConsume =
+        std::min(static_cast<std::size_t>(dataSize), bufferedDataSize);
+
+    // Copy data from streambuf to vector using istream
+    std::istream is(&buffer_);
+    is.read(dataBuffer->data(), bytesToConsume);
+
+    // Note: reading from istream automatically consumes from streambuf
+
+    bytesToRead -= bytesToConsume;
+    bufferOffset += bytesToConsume;
+
+    LOG_DEBUG("Consumed " + std::to_string(bytesToConsume) +
+              " bytes from buffer");
+  }
+
+  if (bytesToRead == 0) {
+    // We have all the data we need
+    handlePhotoData(*dataBuffer);
+    return;
+  }
+
   boost::asio::async_read(
-      socket_, boost::asio::buffer(*dataBuffer),
+      socket_,
+      boost::asio::buffer(dataBuffer->data() + bufferOffset, bytesToRead),
       [this, self, dataBuffer](boost::system::error_code ec,
                                std::size_t bytes_read) {
         if (!ec) {
-          if (bytes_read == dataBuffer->size()) {
-            handlePhotoData(*dataBuffer);
-          } else {
-            LOG_ERROR("Incomplete data received");
-            doWrite(ProtocolParser::createError("Incomplete data"));
-            fileManager_.cancelUpload(currentTempPath_);
-            currentTempPath_.clear();
-            state_ = SessionState::AWAITING_PHOTO_METADATA;
-          }
+          // We've read the remaining bytes
+          handlePhotoData(*dataBuffer);
         } else {
           LOG_ERROR("Binary read error: " + ec.message());
           fileManager_.cancelUpload(currentTempPath_);
@@ -129,6 +152,9 @@ void Session::handlePhotoData(const std::vector<char> &data) {
 
   // Update session with current count
   db_.updateSessionPhotoCount(sessionId_, totalPhotosReceived_);
+
+  // Resume reading commands
+  doRead();
 }
 
 void Session::doWrite(const std::string &message) {
@@ -188,7 +214,7 @@ void Session::handleCommand(const std::string &message) {
 
     currentBatchSize_ = cmd.batchSize;
     photosInBatch_ = 0;
-    doWrite(ProtocolParser::createAck(""));
+    doWrite(ProtocolParser::createAck("READY"));
     state_ = SessionState::AWAITING_PHOTO_METADATA;
     LOG_INFO("Batch started: " + std::to_string(currentBatchSize_) + " photos");
     break;
@@ -273,13 +299,14 @@ void Session::handleCommand(const std::string &message) {
     }
 
     doWrite(ProtocolParser::createAck(std::to_string(photosInBatch_)));
-    state_ = SessionState::AWAITING_SESSION_END;
+    state_ = SessionState::AWAITING_BATCH_START;
     LOG_INFO("Batch completed: " + std::to_string(photosInBatch_) + " photos");
     break;
   }
 
   case CommandType::SESSION_END: {
-    if (state_ != SessionState::AWAITING_SESSION_END) {
+    if (state_ != SessionState::AWAITING_SESSION_END &&
+        state_ != SessionState::AWAITING_BATCH_START) {
       doWrite(ProtocolParser::createError("Invalid state"));
       return;
     }
@@ -292,7 +319,7 @@ void Session::handleCommand(const std::string &message) {
   }
 
   default:
-    LOG_WARN("Unknown command received");
+    LOG_WARN("Unknown command received: " + message);
     doWrite(ProtocolParser::createError("Unknown command"));
     break;
   }
