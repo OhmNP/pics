@@ -22,15 +22,28 @@ ParsedCommand ProtocolParser::parse(const std::string &message) {
   } else if (command == "BEGIN_BATCH") {
     cmd.type = CommandType::BATCH_START;
     if (parts.size() > 1) {
-      cmd.batchSize = std::stoi(parts[1]);
+      try {
+        cmd.batchSize = std::stoi(parts[1]);
+      } catch (const std::exception &) {
+        LOG_ERROR("Invalid batch size: " + parts[1]);
+        cmd.type = CommandType::UNKNOWN;
+      }
     }
   } else if (command == "PHOTO") {
     cmd.type = CommandType::PHOTO_METADATA;
     cmd.photo = parsePhotoMetadata(message);
+    if (cmd.photo.filename.empty()) {
+        cmd.type = CommandType::UNKNOWN;
+    }
   } else if (command == "DATA_TRANSFER") {
     cmd.type = CommandType::DATA_TRANSFER;
     if (parts.size() > 1) {
-      cmd.dataSize = std::stoll(parts[1]);
+      try {
+        cmd.dataSize = std::stoll(parts[1]);
+      } catch (const std::exception &) {
+         LOG_ERROR("Invalid data size: " + parts[1]);
+         cmd.type = CommandType::UNKNOWN;
+      }
     }
   } else if (command == "RESUME_UPLOAD") {
     cmd.type = CommandType::RESUME_UPLOAD;
@@ -52,8 +65,14 @@ PhotoMetadata ProtocolParser::parsePhotoMetadata(const std::string &line) {
 
   if (parts.size() >= 4) {
     photo.filename = parts[1];
-    photo.size = std::stoll(parts[2]);
-    photo.hash = parts[3];
+    try {
+        photo.size = std::stoll(parts[2]);
+        photo.hash = parts[3];
+    } catch (const std::exception &) {
+        LOG_ERROR("Invalid photo size: " + parts[2]);
+        // Return empty filename to indicate error
+        photo.filename = ""; 
+    }
   }
 
   return photo;

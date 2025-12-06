@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Box, Card, CardContent, Typography, Grid, CircularProgress } from '@mui/material';
+import { Box, Typography, Grid, CircularProgress, LinearProgress } from '@mui/material';
 import { api, ServerStats } from '../services/api';
 import LiveConnections from './LiveConnections';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
@@ -14,27 +14,59 @@ interface StatCardProps {
     value: string | number;
     icon: React.ReactNode;
     color: string;
+    trend?: string;
 }
 
-function StatCard({ title, value, icon, color }: StatCardProps) {
+function StatCard({ title, value, icon, color, trend }: StatCardProps) {
     return (
-        <Card sx={{ height: '100%' }}>
-            <CardContent>
-                <Box display="flex" alignItems="center" justifyContent="space-between">
-                    <Box>
-                        <Typography variant="body2" color="text.secondary" gutterBottom>
-                            {title}
-                        </Typography>
-                        <Typography variant="h4" fontWeight="bold">
-                            {value}
-                        </Typography>
-                    </Box>
-                    <Box sx={{ color, fontSize: 48, opacity: 0.8 }}>
-                        {icon}
-                    </Box>
-                </Box>
-            </CardContent>
-        </Card>
+        <div className="glass-panel" style={{ padding: '1.5rem', borderRadius: '16px', height: '100%', position: 'relative', overflow: 'hidden' }}>
+            <div style={{
+                position: 'absolute',
+                top: '-20px',
+                right: '-20px',
+                width: '100px',
+                height: '100px',
+                borderRadius: '50%',
+                background: color,
+                opacity: 0.15,
+                filter: 'blur(20px)'
+            }} />
+
+            <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={2}>
+                <div style={{
+                    padding: '12px',
+                    borderRadius: '12px',
+                    background: `linear-gradient(135deg, ${color}22, transparent)`,
+                    color: color,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                }}>
+                    {icon}
+                </div>
+            </Box>
+
+            <Typography variant="h3" fontWeight="bold" sx={{ fontSize: '2rem', mb: 0.5 }}>
+                {value}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
+                {title}
+            </Typography>
+
+            {trend && (
+                <Typography variant="caption" sx={{
+                    display: 'inline-block',
+                    mt: 2,
+                    px: 1,
+                    py: 0.5,
+                    borderRadius: '6px',
+                    background: 'rgba(255,255,255,0.05)',
+                    color: 'var(--text-muted)'
+                }}>
+                    {trend}
+                </Typography>
+            )}
+        </div>
     );
 }
 
@@ -83,64 +115,64 @@ export default function Dashboard() {
     if (connectionStatus === 'connecting' && !stats) {
         return (
             <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
-                <CircularProgress />
+                <CircularProgress sx={{ color: 'var(--primary)' }} />
             </Box>
         );
     }
 
-    const storagePercentage = stats ? ((stats.storageUsed / stats.storageLimit) * 100).toFixed(1) : '0';
+    const storagePercentage = stats ? ((stats.storageUsed / stats.storageLimit) * 100) : 0;
 
     return (
-        <Box p={3}>
-            <Box display="flex" alignItems="center" justifyContent="space-between" mb={3}>
-                <Typography variant="h4" fontWeight="bold">
-                    PhotoSync Server Dashboard
-                </Typography>
-                <Box display="flex" alignItems="center" gap={1}>
+        <Box>
+            <Box display="flex" alignItems="center" justifyContent="space-between" mb={4}>
+                <div>
+                    <Typography variant="h4" fontWeight="800" className="gradient-text" gutterBottom>
+                        Dashboard Overview
+                    </Typography>
+                    <Typography variant="body1" color="text.secondary">
+                        System Status & Real-time Metrics
+                    </Typography>
+                </div>
+
+                <Box display="flex" alignItems="center" gap={1} className="glass-panel" sx={{ px: 2, py: 1, borderRadius: '50px' }}>
                     {connectionStatus === 'connected' && (
                         <>
-                            <CheckCircleIcon sx={{ color: '#10b981' }} />
-                            <Typography color="#10b981" fontWeight={500}>
-                                Running
+                            <CheckCircleIcon sx={{ color: 'var(--accent-green)' }} />
+                            <Typography sx={{ color: 'var(--accent-green)', fontWeight: 600 }}>
+                                System Online
                             </Typography>
                         </>
                     )}
                     {connectionStatus === 'connecting' && (
                         <>
-                            <CircularProgress size={20} sx={{ color: '#f59e0b' }} />
-                            <Typography color="#f59e0b" fontWeight={500}>
+                            <CircularProgress size={16} sx={{ color: '#f59e0b' }} />
+                            <Typography sx={{ color: '#f59e0b', fontWeight: 600 }}>
                                 Connecting...
                             </Typography>
                         </>
                     )}
                     {connectionStatus === 'offline' && (
                         <>
-                            <Box
-                                sx={{
-                                    width: 12,
-                                    height: 12,
-                                    borderRadius: '50%',
-                                    bgcolor: '#ef4444',
-                                    boxShadow: '0 0 0 4px rgba(239, 68, 68, 0.2)',
-                                }}
-                            />
-                            <Box>
-                                <Typography color="#ef4444" fontWeight={500}>
-                                    Offline
-                                </Typography>
-                                {lastUpdated && (
-                                    <Typography variant="caption" color="text.secondary" display="block">
-                                        Last seen: {lastUpdated.toLocaleTimeString()}
-                                    </Typography>
-                                )}
-                            </Box>
+                            <div style={{ width: 12, height: 12, borderRadius: '50%', background: '#ef4444' }} />
+                            <Typography sx={{ color: '#ef4444', fontWeight: 600 }}>
+                                Offline
+                            </Typography>
                         </>
+                    )}
+                    {lastUpdated && (
+                        <Typography variant="caption" sx={{ color: 'var(--text-muted)', ml: 1, borderLeft: '1px solid var(--border-subtle)', pl: 1 }}>
+                            {lastUpdated.toLocaleTimeString()}
+                        </Typography>
                     )}
                 </Box>
             </Box>
 
             {/* Live Connections */}
-            {stats && <LiveConnections />}
+            {stats && (
+                <Box mb={4}>
+                    <LiveConnections />
+                </Box>
+            )}
 
             {stats ? (
                 <Grid container spacing={3}>
@@ -150,7 +182,8 @@ export default function Dashboard() {
                             title="Total Photos"
                             value={stats.totalPhotos.toLocaleString()}
                             icon={<PhotoCameraIcon fontSize="inherit" />}
-                            color="#00d9ff"
+                            color="var(--primary)"
+                            trend="Indexed Media"
                         />
                     </Grid>
 
@@ -159,16 +192,18 @@ export default function Dashboard() {
                             title="Connected Clients"
                             value={stats.connectedClients}
                             icon={<PeopleIcon fontSize="inherit" />}
-                            color="#8b5cf6"
+                            color="var(--secondary)"
+                            trend="Active Devices"
                         />
                     </Grid>
 
                     <Grid item xs={12} sm={6} md={4}>
                         <StatCard
                             title="Synced Photos"
-                            value={stats.totalPhotos.toLocaleString()}
+                            value={stats.totalPhotos.toLocaleString()} // Assuming same for now, or stats.syncedPhotos if available
                             icon={<PhotoCameraIcon fontSize="inherit" />}
-                            color="#10b981"
+                            color="var(--accent-green)"
+                            trend="Successfully Synced"
                         />
                     </Grid>
 
@@ -176,10 +211,23 @@ export default function Dashboard() {
                     <Grid item xs={12} sm={6} md={4}>
                         <StatCard
                             title="Storage Used"
-                            value={`${formatBytes(stats.storageUsed)} (${storagePercentage}%)`}
+                            value={formatBytes(stats.storageUsed)}
                             icon={<StorageIcon fontSize="inherit" />}
-                            color="#f59e0b"
+                            color="var(--accent-pink)"
+                            trend={`${storagePercentage.toFixed(1)}% Capacity`}
                         />
+                        <Box mt={-2} mx={3} mb={3}>
+                            <LinearProgress
+                                variant="determinate"
+                                value={storagePercentage}
+                                sx={{
+                                    borderRadius: 4,
+                                    height: 4,
+                                    bgcolor: 'rgba(255,255,255,0.1)',
+                                    '& .MuiLinearProgress-bar': { backgroundColor: 'var(--accent-pink)' }
+                                }}
+                            />
+                        </Box>
                     </Grid>
 
                     <Grid item xs={12} sm={6} md={4}>
@@ -188,6 +236,7 @@ export default function Dashboard() {
                             value={stats.totalSessions}
                             icon={<SyncIcon fontSize="inherit" />}
                             color="#06b6d4"
+                            trend="Sync Operations"
                         />
                     </Grid>
 
@@ -197,30 +246,20 @@ export default function Dashboard() {
                             value={formatUptime(stats.uptime)}
                             icon={<AccessTimeIcon fontSize="inherit" />}
                             color="#ec4899"
+                            trend="Since Last Restart"
                         />
                     </Grid>
                 </Grid>
             ) : (
-                <Box mt={4} textAlign="center">
-                    <Typography color="text.secondary">
+                <Box mt={8} textAlign="center" className="glass-panel" p={4} borderRadius={4}>
+                    <Typography color="text.secondary" variant="h6">
                         Server is offline. Waiting for connection...
+                    </Typography>
+                    <Typography variant="body2" color="var(--text-muted)" mt={1}>
+                        Please check if the desktop server application is running.
                     </Typography>
                 </Box>
             )}
-
-            {/* Recent Activity Section (Mock data for now) */}
-            <Box mt={4}>
-                <Typography variant="h6" gutterBottom>
-                    Recent Activity
-                </Typography>
-                <Card>
-                    <CardContent>
-                        <Typography color="text.secondary">
-                            Real-time activity feed will be available with WebSocket implementation
-                        </Typography>
-                    </CardContent>
-                </Card>
-            </Box>
         </Box>
     );
 }

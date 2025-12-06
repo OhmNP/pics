@@ -1,3 +1,34 @@
+:root {
+  /* Core Colors */
+  --bg-dark: #0f111a;
+  --bg-panel: #1a1d2e;
+  --bg-card: rgba(30, 34, 53, 0.7);
+  --bg-card-hover: rgba(40, 45, 70, 0.8);
+  
+  /* Accents */
+  --primary: #00d9ff;
+  --primary-glow: rgba(0, 217, 255, 0.4);
+  --secondary: #7c3aed;
+  --secondary-glow: rgba(124, 58, 237, 0.4);
+  --accent-pink: #f472b6;
+  --accent-green: #34d399;
+  
+  /* Text */
+  --text-primary: #ffffff;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  
+  /* Borders */
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-highlight: rgba(255, 255, 255, 0.15);
+  
+  /* Effects */
+  --glass-bg: rgba(26, 29, 46, 0.6);
+  --glass-border: 1px solid rgba(255, 255, 255, 0.1);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -11,16 +42,45 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #1a1d2e;
-  color: #ffffff;
+  background-color: var(--bg-dark);
+  color: var(--text-primary);
+  min-height: 100vh;
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
-#root {
-  width: 100vw;
-  height: 100vh;
+::-webkit-scrollbar-track {
+  background: var(--bg-dark);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-card);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Glassmorphism Utilities */
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+
+.neon-text {
+  text-shadow: 0 0 10px var(--primary-glow);
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
