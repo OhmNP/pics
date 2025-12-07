@@ -6,9 +6,17 @@
 #include <vector>
 
 struct PhotoMetadata {
+  int id = -1;
   std::string filename;
-  long long size;
+  std::string originalPath;
   std::string hash;
+  long long size = 0;
+  int width = 0;
+  int height = 0;
+  std::string mimeType;
+  std::string takenAt;
+  std::string receivedAt;
+  int clientId = -1;
 };
 
 struct SyncSession {
@@ -72,6 +80,16 @@ public:
   bool photoExists(const std::string &hash);
   int getPhotoCount(int clientId);
 
+  // Media grid operations
+  std::vector<PhotoMetadata>
+  getPhotosWithPagination(int offset, int limit, int clientId = -1,
+                          const std::string &startDate = "",
+                          const std::string &endDate = "");
+  PhotoMetadata getPhotoById(int photoId);
+  int getFilteredPhotoCount(int clientId = -1,
+                            const std::string &startDate = "",
+                            const std::string &endDate = "");
+
   // API Statistics Methods
   int getTotalPhotoCount();
   int getTotalClientCount();
@@ -79,6 +97,12 @@ public:
   long long getTotalStorageUsed();
 
   std::string getCurrentTimestamp();
+
+  // Migration operations
+  bool migratePhotosToMetadata();
+
+  // Integrity Check
+  void checkStorageIntegrity(const std::string &storagePath);
 
   // Authentication operations
   bool createAdminUser(const std::string &username,

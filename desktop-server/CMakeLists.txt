@@ -28,6 +28,7 @@ add_executable(PhotoSyncServer
     src/ConnectionManager.cpp
     src/UdpBroadcaster.cpp
     src/AuthenticationManager.cpp
+    src/ThumbnailGenerator.cpp
 )
 
 target_include_directories(PhotoSyncServer PRIVATE ${Boost_INCLUDE_DIRS} ${SQLite3_INCLUDE_DIRS} ${OPENSSL_INCLUDE_DIR})

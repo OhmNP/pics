@@ -2,6 +2,7 @@
 #include "AuthenticationManager.h"
 #include "ConnectionManager.h"
 #include "Logger.h"
+#include "ThumbnailGenerator.h"
 #include <crow.h>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -217,6 +218,51 @@ void ApiServer::setupRoutes() {
         auto res = crow::response(handleGetValidate(authHeader));
         res.add_header("Access-Control-Allow-Origin", "*");
         res.add_header("Content-Type", "application/json");
+        return res;
+      });
+
+  // Media grid endpoints
+  // GET /api/media - List photos with pagination
+  CROW_ROUTE((*g_app), "/api/media")
+      .methods("GET"_method)([this](const crow::request &req) {
+        int offset = req.url_params.get("offset")
+                         ? std::stoi(req.url_params.get("offset"))
+                         : 0;
+        int limit = req.url_params.get("limit")
+                        ? std::stoi(req.url_params.get("limit"))
+                        : 50;
+        int clientId = req.url_params.get("client_id")
+                           ? std::stoi(req.url_params.get("client_id"))
+                           : -1;
+        std::string startDate = req.url_params.get("start_date")
+                                    ? req.url_params.get("start_date")
+                                    : "";
+        std::string endDate = req.url_params.get("end_date")
+                                  ? req.url_params.get("end_date")
+                                  : "";
+
+        auto res = crow::response(
+            handleGetMedia(offset, limit, clientId, startDate, endDate));
+        res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Content-Type", "application/json");
+        return res;
+      });
+
+  // GET /api/thumbnails/:id - Serve thumbnail
+  CROW_ROUTE((*g_app), "/api/thumbnails/<int>")
+      .methods("GET"_method)([this](int photoId) {
+        crow::response res;
+        handleGetThumbnail(res, photoId);
+        res.add_header("Access-Control-Allow-Origin", "*");
+        return res;
+      });
+
+  // GET /api/media/:id/download - Serve full image
+  CROW_ROUTE((*g_app), "/api/media/<int>/download")
+      .methods("GET"_method)([this](int photoId) {
+        crow::response res;
+        handleGetMediaDownload(res, photoId);
+        res.add_header("Access-Control-Allow-Origin", "*");
         return res;
       });
 
@@ -732,5 +778,157 @@ bool ApiServer::validateSession(const std::string &authHeader, int &userId) {
   } catch (const std::exception &e) {
     LOG_ERROR("Error in validateSession: " + std::string(e.what()));
     return false;
+  }
+}
+
+// Media Grid Endpoints
+
+// GET /api/media - List photos with pagination and filters
+std::string ApiServer::handleGetMedia(int offset, int limit, int clientId,
+                                      const std::string &startDate,
+                                      const std::string &endDate) {
+  try {
+    // Validate and cap limit
+    if (limit <= 0)
+      limit = 50;
+    if (limit > 100)
+      limit = 100;
+    if (offset < 0)
+      offset = 0;
+
+    // Get photos with pagination
+    auto photos = db_.getPhotosWithPagination(offset, limit, clientId,
+                                              startDate, endDate);
+
+    // Get total count for pagination
+    int total = db_.getFilteredPhotoCount(clientId, startDate, endDate);
+
+    // Build response
+    json items = json::array();
+    for (const auto &photo : photos) {
+      json item = {
+          {"id", photo.id},
+          {"filename", photo.filename},
+          {"thumbnailUrl", "/api/thumbnails/" + std::to_string(photo.id)},
+          {"fullUrl", "/api/media/" + std::to_string(photo.id) + "/download"},
+          {"mimeType", photo.mimeType},
+          {"size", photo.size},
+          {"uploadedAt", photo.receivedAt},
+          {"clientId", photo.clientId}};
+      items.push_back(item);
+    }
+
+    json response = {{"items", items},
+                     {"pagination",
+                      {{"offset", offset},
+                       {"limit", limit},
+                       {"total", total},
+                       {"hasMore", (offset + limit) < total}}}};
+
+    return response.dump();
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error in handleGetMedia: " + std::string(e.what()));
+    json error = {{"error", "Failed to fetch media"}};
+    return error.dump();
+  }
+}
+
+// GET /api/thumbnails/:id - Serve thumbnail image
+void ApiServer::handleGetThumbnail(crow::response &res, int photoId) {
+  LOG_INFO("Handling thumbnail request for " + std::to_string(photoId));
+  try {
+    // Check if thumbnail exists, generate if not
+    if (!ThumbnailGenerator::thumbnailExists(photoId)) {
+      // Get photo metadata to find original file
+      PhotoMetadata photo = db_.getPhotoById(photoId);
+      if (photo.id == -1) {
+        res.code = 404;
+        res.write("Photo not found");
+        LOG_INFO("Thumbnail not found (DB scan): " + std::to_string(photoId));
+        return;
+      }
+
+      // Ensure thumbnails directory exists
+      ThumbnailGenerator::ensureThumbnailsDirectory();
+
+      // Generate thumbnail
+      std::string thumbnailPath = ThumbnailGenerator::getThumbnailPath(photoId);
+      if (!ThumbnailGenerator::generateThumbnail(photo.originalPath,
+                                                 thumbnailPath)) {
+        LOG_ERROR("Failed to generate thumbnail for photo ID: " +
+                  std::to_string(photoId));
+        res.code = 500;
+        res.write("Failed to generate thumbnail");
+        return;
+      }
+    }
+
+    // Read and serve thumbnail
+    std::string thumbnailPath = ThumbnailGenerator::getThumbnailPath(photoId);
+    std::ifstream file(thumbnailPath, std::ios::binary);
+    if (!file) {
+      res.code = 404;
+      res.write("Thumbnail not found");
+      return;
+    }
+
+    // Read file contents
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    file.close();
+
+    // Set headers
+    res.add_header("Content-Type", "image/jpeg");
+    res.add_header("Cache-Control", "public, max-age=86400"); // 24 hours
+    res.code = 200;
+    res.write(content);
+    LOG_INFO("Serving thumbnail for " + std::to_string(photoId));
+
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error in handleGetThumbnail: " + std::string(e.what()));
+    res.code = 500;
+    res.write("Internal server error");
+  }
+}
+
+// GET /api/media/:id/download - Serve full-size image
+void ApiServer::handleGetMediaDownload(crow::response &res, int photoId) {
+  LOG_INFO("Handling full image request for " + std::to_string(photoId));
+  try {
+    // Get photo metadata
+    PhotoMetadata photo = db_.getPhotoById(photoId);
+    if (photo.id == -1) {
+      res.code = 404;
+      res.write("Photo not found");
+      return;
+    }
+
+    // Read file
+    std::ifstream file(photo.originalPath, std::ios::binary);
+    if (!file) {
+      LOG_ERROR("Photo file not found: " + photo.originalPath);
+      res.code = 404;
+      res.write("Photo file not found");
+      return;
+    }
+
+    // Read file contents
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    file.close();
+
+    // Set headers
+    res.add_header("Content-Type", photo.mimeType);
+    res.add_header("Cache-Control", "public, max-age=604800"); // 7 days
+    res.add_header("Content-Disposition",
+                   "inline; filename=\"" + photo.filename + "\"");
+    res.code = 200;
+    res.write(content);
+    LOG_INFO("Serving full image for " + std::to_string(photoId));
+
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error in handleGetMediaDownload: " + std::string(e.what()));
+    res.code = 500;
+    res.write("Internal server error");
   }
 }

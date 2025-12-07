@@ -1,16 +1,9 @@
-import { useState, useEffect } from 'react';
-import { Box, Typography, Grid, Card, CardContent, CardMedia, TextField, Select, MenuItem, FormControl, InputLabel, Chip, CircularProgress } from '@mui/material';
-import { api } from '../services/api';
+import { useState, useCallback } from 'react';
+import { Box, Typography, Grid, Card, CardMedia, CardContent, TextField, Select, MenuItem, FormControl, InputLabel, Chip, CircularProgress, Skeleton } from '@mui/material';
+import { api, MediaItem } from '../services/api';
+import { useInfiniteScroll } from '../hooks/useInfiniteScroll';
+import MediaViewer from './MediaViewer';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
-
-interface Photo {
-    id: number;
-    filename: string;
-    size: number;
-    clientId: number;
-    clientName: string;
-    receivedAt: string;
-}
 
 function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';
@@ -32,46 +25,55 @@ function formatTimeAgo(dateString: string): string {
 }
 
 export default function Photos() {
-    const [photos, setPhotos] = useState<Photo[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [clientFilter, setClientFilter] = useState<number>(-1);
     const [searchTerm, setSearchTerm] = useState('');
-    const [clientFilter, setClientFilter] = useState('all');
-    const [sortBy, setSortBy] = useState('newest');
+    const [selectedPhoto, setSelectedPhoto] = useState<MediaItem | null>(null);
+    const [viewerOpen, setViewerOpen] = useState(false);
 
-    useEffect(() => {
-        const fetchPhotos = async () => {
-            try {
-                const response = await api.getPhotos();
-                // Note: API currently returns empty array, using mock data for UI demo
-                setPhotos([
-                    { id: 1, filename: 'IMG_001.jpg', size: 2100000, clientId: 1, clientName: 'Pixel 7', receivedAt: new Date(Date.now() - 7200000).toISOString() },
-                    { id: 2, filename: 'IMG_002.jpg', size: 1800000, clientId: 1, clientName: 'Pixel 7', receivedAt: new Date(Date.now() - 14400000).toISOString() },
-                    { id: 3, filename: 'IMG_003.jpg', size: 2500000, clientId: 2, clientName: 'Galaxy S21', receivedAt: new Date(Date.now() - 21600000).toISOString() },
-                    { id: 4, filename: 'IMG_004.jpg', size: 1900000, clientId: 1, clientName: 'Pixel 7', receivedAt: new Date(Date.now() - 28800000).toISOString() },
-                ]);
-            } catch (err) {
-                console.error('Error fetching photos:', err);
-            } finally {
-                setLoading(false);
-            }
-        };
+    const fetchPhotos = useCallback(async (offset: number, limit: number) => {
+        const response = await api.getMedia(offset, limit, clientFilter >= 0 ? clientFilter : undefined);
+        return response.data;
+    }, [clientFilter]);
 
-        fetchPhotos();
-    }, []);
-
-    const filteredPhotos = photos.filter(photo => {
-        const matchesSearch = photo.filename.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesClient = clientFilter === 'all' || photo.clientId.toString() === clientFilter;
-        return matchesSearch && matchesClient;
+    const {
+        items: photos,
+        loading,
+        hasMore,
+        error,
+        sentinelRef,
+        reset
+    } = useInfiniteScroll<MediaItem>({
+        fetchFunction: fetchPhotos,
+        limit: 50
     });
 
-    if (loading) {
-        return (
-            <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
-                <CircularProgress />
-            </Box>
-        );
-    }
+    // Reset when filter changes
+    const handleClientFilterChange = (value: number) => {
+        setClientFilter(value);
+        reset();
+    };
+
+    // Handle photo click to open viewer
+    const handlePhotoClick = (photo: MediaItem) => {
+        setSelectedPhoto(photo);
+        setViewerOpen(true);
+    };
+
+    // Handle navigation in viewer
+    const handleNavigate = (direction: 'prev' | 'next') => {
+        if (!selectedPhoto) return;
+        const currentIndex = filteredPhotos.findIndex(p => p.id === selectedPhoto.id);
+        if (direction === 'prev' && currentIndex > 0) {
+            setSelectedPhoto(filteredPhotos[currentIndex - 1]);
+        } else if (direction === 'next' && currentIndex < filteredPhotos.length - 1) {
+            setSelectedPhoto(filteredPhotos[currentIndex + 1]);
+        }
+    };
+
+    // Filter photos by search term (client-side)
+    const filteredPhotos = photos.filter(photo =>
+        photo.filename.toLowerCase().includes(searchTerm.toLowerCase())
+    );
 
     return (
         <Box p={3}>
@@ -92,39 +94,58 @@ export default function Photos() {
 
                 <FormControl size="small" sx={{ minWidth: 150 }}>
                     <InputLabel>Client</InputLabel>
-                    <Select value={clientFilter} onChange={(e) => setClientFilter(e.target.value)} label="Client">
-                        <MenuItem value="all">All Clients</MenuItem>
-                        <MenuItem value="1">Pixel 7</MenuItem>
-                        <MenuItem value="2">Galaxy S21</MenuItem>
-                    </Select>
-                </FormControl>
-
-                <FormControl size="small" sx={{ minWidth: 150 }}>
-                    <InputLabel>Sort</InputLabel>
-                    <Select value={sortBy} onChange={(e) => setSortBy(e.target.value)} label="Sort">
-                        <MenuItem value="newest">Newest First</MenuItem>
-                        <MenuItem value="oldest">Oldest First</MenuItem>
-                        <MenuItem value="largest">Largest First</MenuItem>
+                    <Select
+                        value={clientFilter}
+                        onChange={(e) => handleClientFilterChange(Number(e.target.value))}
+                        label="Client"
+                    >
+                        <MenuItem value={-1}>All Clients</MenuItem>
+                        <MenuItem value={1}>Client 1</MenuItem>
+                        <MenuItem value={2}>Client 2</MenuItem>
                     </Select>
                 </FormControl>
             </Box>
+
+            {error && (
+                <Box mb={2}>
+                    <Typography color="error">{error}</Typography>
+                </Box>
+            )}
 
             {/* Photo Grid */}
             <Grid container spacing={2}>
                 {filteredPhotos.map((photo) => (
                     <Grid item xs={12} sm={6} md={4} lg={3} key={photo.id}>
-                        <Card>
+                        <Card
+                            className="glass-panel"
+                            onClick={() => handlePhotoClick(photo)}
+                            sx={{ cursor: 'pointer', transition: 'transform 0.2s', '&:hover': { transform: 'scale(1.02)' } }}
+                        >
                             <CardMedia
+                                component="img"
+                                height="200"
+                                image={photo.thumbnailUrl}
+                                alt={photo.filename}
+                                sx={{
+                                    objectFit: 'cover',
+                                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                                }}
+                                onError={(e: any) => {
+                                    e.target.style.display = 'none';
+                                    e.target.nextSibling.style.display = 'flex';
+                                }}
+                            />
+                            <Box
                                 sx={{
                                     height: 200,
                                     backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                                    display: 'flex',
+                                    display: 'none',
                                     alignItems: 'center',
                                     justifyContent: 'center',
                                 }}
                             >
                                 <PhotoCameraIcon sx={{ fontSize: 60, opacity: 0.3 }} />
-                            </CardMedia>
+                            </Box>
                             <CardContent>
                                 <Typography variant="body2" fontWeight={500} noWrap>
                                     {photo.filename}
@@ -133,22 +154,62 @@ export default function Photos() {
                                     {formatBytes(photo.size)}
                                 </Typography>
                                 <Box mt={1} display="flex" gap={0.5} flexWrap="wrap" alignItems="center">
-                                    <Chip label={photo.clientName} size="small" color="primary" variant="outlined" />
+                                    <Chip label={`Client ${photo.clientId}`} size="small" color="primary" variant="outlined" />
                                     <Typography variant="caption" color="text.secondary">
-                                        {formatTimeAgo(photo.receivedAt)}
+                                        {formatTimeAgo(photo.uploadedAt)}
                                     </Typography>
                                 </Box>
                             </CardContent>
                         </Card>
                     </Grid>
                 ))}
+
+                {/* Loading skeletons */}
+                {loading && Array.from({ length: 8 }).map((_, i) => (
+                    <Grid item xs={12} sm={6} md={4} lg={3} key={`skeleton-${i}`}>
+                        <Card>
+                            <Skeleton variant="rectangular" height={200} />
+                            <CardContent>
+                                <Skeleton variant="text" width="80%" />
+                                <Skeleton variant="text" width="40%" />
+                                <Skeleton variant="text" width="60%" />
+                            </CardContent>
+                        </Card>
+                    </Grid>
+                ))}
             </Grid>
 
-            {filteredPhotos.length === 0 && (
+            {/* Sentinel element for infinite scroll */}
+            {hasMore && !loading && (
+                <div ref={sentinelRef} style={{ height: '20px', margin: '20px 0' }} />
+            )}
+
+            {/* No photos message */}
+            {!loading && filteredPhotos.length === 0 && (
                 <Box textAlign="center" py={4}>
-                    <Typography color="text.secondary">No photos found</Typography>
+                    <Typography color="text.secondary">
+                        {photos.length === 0 ? 'No photos found' : 'No photos match your search'}
+                    </Typography>
                 </Box>
             )}
+
+            {/* End of list message */}
+            {!hasMore && photos.length > 0 && (
+                <Box textAlign="center" py={2}>
+                    <Typography variant="caption" color="text.secondary">
+                        All photos loaded ({photos.length} total)
+                    </Typography>
+                </Box>
+            )}
+
+            {/* Media Viewer Modal */}
+            <MediaViewer
+                open={viewerOpen}
+                photo={selectedPhoto}
+                photos={filteredPhotos}
+                onClose={() => setViewerOpen(false)}
+                onNavigate={handleNavigate}
+            />
         </Box>
     );
 }

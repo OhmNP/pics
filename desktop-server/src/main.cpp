@@ -11,7 +11,6 @@
 #include <iostream>
 #include <thread>
 
-
 // Undefine Windows macros that conflict with our enums
 #ifdef ERROR
 #undef ERROR
@@ -74,6 +73,9 @@ int main(int argc, char *argv[]) {
     LOG_FATAL("Failed to create database schema");
     return 1;
   }
+
+  // Check storage integrity on startup
+  db.checkStorageIntegrity(config.getPhotosDir());
 
   // Setup signal handlers
   std::signal(SIGINT, signalHandler);

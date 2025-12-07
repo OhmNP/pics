@@ -2,8 +2,14 @@
 #include "AuthenticationManager.h"
 #include "Logger.h"
 #include <chrono>
+#include <filesystem>
 #include <iomanip>
+#include <iostream>
+#include <map> // Added for the new implementation
+#include <set>
 #include <sstream>
+
+namespace fs = std::filesystem;
 
 DatabaseManager::DatabaseManager() : db_(nullptr) {}
 
@@ -37,19 +43,6 @@ bool DatabaseManager::createSchema() {
         );
     )";
 
-  const char *createPhotosTable = R"(
-        CREATE TABLE IF NOT EXISTS photos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_id INTEGER,
-            filename TEXT,
-            size INTEGER,
-            hash TEXT UNIQUE,
-            file_path TEXT,
-            received_at TIMESTAMP,
-            FOREIGN KEY(client_id) REFERENCES clients(id)
-        );
-    )";
-
   const char *createSessionsTable = R"(
         CREATE TABLE IF NOT EXISTS sync_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,18 +55,12 @@ bool DatabaseManager::createSchema() {
         );
     )";
 
-  const char *createHashIndex = R"(
-        CREATE INDEX IF NOT EXISTS idx_photos_hash ON photos(hash);
-    )";
-
   if (!executeSQL(createClientTable))
     return false;
-  if (!executeSQL(createPhotosTable))
-    return false;
+  // createPhotosTable removed
   if (!executeSQL(createSessionsTable))
     return false;
-  if (!executeSQL(createHashIndex))
-    return false;
+  // createHashIndex removed
 
   // Authentication tables
   const char *createAdminUsersTable = R"(
@@ -123,6 +110,40 @@ bool DatabaseManager::createSchema() {
         CREATE INDEX IF NOT EXISTS idx_reset_token ON password_reset_tokens(token);
     )";
 
+  // Metadata table for media grid
+  const char *createMetadataTable = R"(
+        CREATE TABLE IF NOT EXISTS metadata (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER,
+            filename TEXT NOT NULL,
+            hash TEXT UNIQUE NOT NULL,
+            size INTEGER NOT NULL,
+            width INTEGER DEFAULT 0,
+            height INTEGER DEFAULT 0,
+            mime_type TEXT,
+            taken_at TIMESTAMP,
+            received_at TIMESTAMP,
+            original_path TEXT,
+            FOREIGN KEY(client_id) REFERENCES clients(id)
+        );
+    )";
+
+  const char *createMetadataHashIndex = R"(
+        CREATE INDEX IF NOT EXISTS idx_metadata_hash ON metadata(hash);
+    )";
+
+  const char *createMetadataClientIndex = R"(
+        CREATE INDEX IF NOT EXISTS idx_metadata_client ON metadata(client_id);
+    )";
+
+  // Create metadata table first
+  if (!executeSQL(createMetadataTable))
+    return false;
+  if (!executeSQL(createMetadataHashIndex))
+    return false;
+  if (!executeSQL(createMetadataClientIndex))
+    return false;
+
   if (!executeSQL(createAdminUsersTable))
     return false;
   if (!executeSQL(createAuthSessionsTable))
@@ -135,6 +156,11 @@ bool DatabaseManager::createSchema() {
     return false;
   if (!executeSQL(createResetTokenIndex))
     return false;
+
+  // Migrate existing photos if necessary
+  if (!migratePhotosToMetadata()) {
+    LOG_ERROR("Failed to migrate photos to metadata table");
+  }
 
   // Create initial admin user if none exists
   insertInitialAdminUser();
@@ -234,9 +260,9 @@ std::vector<DatabaseManager::ClientRecord> DatabaseManager::getClients() {
             c.device_id, 
             c.last_seen, 
             c.total_photos,
-            COALESCE(SUM(p.size), 0) as storage_used
+            COALESCE(SUM(m.size), 0) as storage_used
         FROM clients c
-        LEFT JOIN photos p ON c.id = p.client_id
+        LEFT JOIN metadata m ON c.id = m.client_id
         GROUP BY c.id
         ORDER BY c.last_seen DESC
     )";
@@ -345,8 +371,8 @@ bool DatabaseManager::insertPhoto(int clientId, const PhotoMetadata &photo,
 
   sqlite3_stmt *stmt;
   const char *sql =
-      "INSERT INTO photos (client_id, filename, size, hash, file_path, "
-      "received_at) VALUES (?, ?, ?, ?, ?, ?)";
+      "INSERT INTO metadata (client_id, filename, size, hash, original_path, "
+      "received_at, mime_type) VALUES (?, ?, ?, ?, ?, ?, 'image/jpeg')";
 
   if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
     LOG_ERROR("Failed to prepare photo insert: " +
@@ -384,7 +410,7 @@ bool DatabaseManager::insertPhoto(int clientId, const PhotoMetadata &photo,
 
 bool DatabaseManager::photoExists(const std::string &hash) {
   sqlite3_stmt *stmt;
-  const char *sql = "SELECT COUNT(*) FROM photos WHERE hash = ?";
+  const char *sql = "SELECT COUNT(*) FROM metadata WHERE hash = ?";
 
   if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
     return false;
@@ -403,7 +429,7 @@ bool DatabaseManager::photoExists(const std::string &hash) {
 
 int DatabaseManager::getPhotoCount(int clientId) {
   sqlite3_stmt *stmt;
-  const char *sql = "SELECT COUNT(*) FROM photos WHERE client_id = ?";
+  const char *sql = "SELECT COUNT(*) FROM metadata WHERE client_id = ?";
 
   if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
     return 0;
@@ -422,7 +448,7 @@ int DatabaseManager::getPhotoCount(int clientId) {
 
 // API Statistics Methods
 int DatabaseManager::getTotalPhotoCount() {
-  const char *sql = "SELECT COUNT(*) FROM photos;";
+  const char *sql = "SELECT COUNT(*) FROM metadata;";
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -480,7 +506,7 @@ int DatabaseManager::getCompletedSessionCount() {
 }
 
 long long DatabaseManager::getTotalStorageUsed() {
-  const char *sql = "SELECT SUM(size) FROM photos;";
+  const char *sql = "SELECT SUM(size) FROM metadata;";
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -888,4 +914,362 @@ int DatabaseManager::cleanupExpiredResetTokens() {
   }
 
   return sqlite3_changes(db_);
+}
+
+// Media grid operations
+
+std::vector<PhotoMetadata>
+DatabaseManager::getPhotosWithPagination(int offset, int limit, int clientId,
+                                         const std::string &startDate,
+                                         const std::string &endDate) {
+
+  std::vector<PhotoMetadata> photos;
+
+  // Build query with optional filters
+  std::string sql = R"(
+    SELECT id, filename, hash, size, original_path
+    FROM metadata
+    WHERE 1=1
+  )";
+
+  if (clientId >= 0) {
+    sql += " AND client_id = " + std::to_string(clientId);
+  }
+
+  if (!startDate.empty()) {
+    sql += " AND received_at >= '" + startDate + "'";
+  }
+
+  if (!endDate.empty()) {
+    sql += " AND received_at <= '" + endDate + "'";
+  }
+
+  sql += " ORDER BY id DESC LIMIT " + std::to_string(limit) + " OFFSET " +
+         std::to_string(offset);
+
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+    LOG_ERROR("Failed to prepare getPhotosWithPagination statement: " +
+              std::string(sqlite3_errmsg(db_)));
+    return photos;
+  }
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    PhotoMetadata photo;
+    photo.id = sqlite3_column_int(stmt, 0);
+
+    const char *filename =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+    if (filename)
+      photo.filename = filename;
+
+    const char *hash =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
+    if (hash)
+      photo.hash = hash;
+
+    photo.size = sqlite3_column_int64(stmt, 3);
+
+    const char *originalPath =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
+    if (originalPath)
+      photo.originalPath = originalPath;
+    else
+      photo.originalPath = "./storage/photos/" + photo.filename; // Fallback
+    photo.mimeType = "image/jpeg"; // Default, could be enhanced
+    photo.width = 0;
+    photo.height = 0;
+    photo.takenAt = "";
+    photo.receivedAt = "";
+    photo.clientId = clientId >= 0 ? clientId : 0;
+
+    photos.push_back(photo);
+  }
+
+  sqlite3_finalize(stmt);
+  return photos;
+}
+
+int DatabaseManager::getFilteredPhotoCount(int clientId,
+                                           const std::string &startDate,
+                                           const std::string &endDate) {
+  std::string sql = "SELECT COUNT(*) FROM metadata WHERE 1=1";
+
+  if (clientId >= 0) {
+    sql += " AND client_id = " + std::to_string(clientId);
+  }
+
+  if (!startDate.empty()) {
+    sql += " AND received_at >= '" + startDate + "'";
+  }
+
+  if (!endDate.empty()) {
+    sql += " AND received_at <= '" + endDate + "'";
+  }
+
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+    LOG_ERROR("Failed to prepare getFilteredPhotoCount statement: " +
+              std::string(sqlite3_errmsg(db_)));
+    return 0;
+  }
+
+  int count = 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    count = sqlite3_column_int(stmt, 0);
+  }
+
+  sqlite3_finalize(stmt);
+  return count;
+}
+
+PhotoMetadata DatabaseManager::getPhotoById(int photoId) {
+  PhotoMetadata photo;
+  photo.id = -1; // Indicate not found
+
+  const char *sql = R"(
+    SELECT id, filename, hash, size, original_path
+    FROM metadata
+    WHERE id = ?
+  )";
+
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    LOG_ERROR("Failed to prepare getPhotoById statement: " +
+              std::string(sqlite3_errmsg(db_)));
+    return photo;
+  }
+
+  sqlite3_bind_int(stmt, 1, photoId);
+
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    photo.id = sqlite3_column_int(stmt, 0);
+
+    const char *filename =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+    if (filename)
+      photo.filename = filename;
+
+    const char *hash =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
+    if (hash)
+      photo.hash = hash;
+
+    photo.size = sqlite3_column_int64(stmt, 3);
+
+    const char *originalPath =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
+    if (originalPath)
+      photo.originalPath = originalPath;
+    else
+      photo.originalPath = "./storage/photos/" + photo.filename; // Fallback
+    photo.mimeType = "image/jpeg";
+    photo.width = 0;
+    photo.height = 0;
+    photo.takenAt = "";
+    photo.receivedAt = "";
+    photo.clientId = 0;
+  }
+
+  sqlite3_finalize(stmt);
+  return photo;
+}
+
+bool DatabaseManager::migratePhotosToMetadata() {
+  // Check if photos table exists
+  sqlite3_stmt *stmt;
+  const char *checkSql =
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='photos'";
+  if (sqlite3_prepare_v2(db_, checkSql, -1, &stmt, nullptr) != SQLITE_OK) {
+    return false;
+  }
+
+  bool exists = false;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    exists = true;
+  }
+  sqlite3_finalize(stmt);
+
+  if (!exists) {
+    return true; // Nothing to migrate
+  }
+
+  LOG_INFO("Migrating photos from 'photos' table to 'metadata' table...");
+
+  // Begin transaction
+  if (!executeSQL("BEGIN TRANSACTION;")) {
+    return false;
+  }
+
+  // Copy data
+  // Map columns:
+  // photos: client_id, filename, size, hash, file_path, received_at
+  // metadata: client_id, filename, size, hash, original_path, received_at,
+  // mime_type
+  const char *copySql = R"(
+    INSERT OR IGNORE INTO metadata (client_id, filename, size, hash, original_path, received_at, mime_type)
+    SELECT client_id, filename, size, hash, file_path, received_at, 'image/jpeg'
+    FROM photos;
+  )";
+
+  if (!executeSQL(copySql)) {
+    LOG_ERROR("Failed to migrate photos data");
+    executeSQL("ROLLBACK;");
+    return false;
+  }
+
+  // Drop old table
+  if (!executeSQL("DROP TABLE photos;")) {
+    LOG_ERROR("Failed to drop old photos table");
+    executeSQL("ROLLBACK;");
+    return false;
+  }
+
+  executeSQL("COMMIT;");
+  LOG_INFO("Migration complete. 'photos' table removed.");
+  return true;
+}
+
+void DatabaseManager::checkStorageIntegrity(const std::string &storagePath) {
+  LOG_INFO("Starting storage integrity check and repair...");
+
+  // 1. Scan filesystem to build Hash -> Path map
+  std::map<std::string, std::string> fsFiles;
+  try {
+    if (fs::exists(storagePath)) {
+      for (const auto &entry : fs::recursive_directory_iterator(storagePath)) {
+        if (entry.is_regular_file()) {
+          std::string fullPath = entry.path().string();
+          // Normalize path separators to forward slashes for consistency
+          std::replace(fullPath.begin(), fullPath.end(), '\\', '/');
+
+          std::string filename = entry.path().filename().string();
+
+          if (filename.find("thumbnails") != std::string::npos ||
+              fullPath.find("/thumbnails/") != std::string::npos ||
+              fullPath.find("/temp/") != std::string::npos) {
+            continue;
+          }
+
+          // Extract hash (remove extension)
+          size_t dotPos = filename.find_last_of('.');
+          std::string hash = (dotPos != std::string::npos)
+                                 ? filename.substr(0, dotPos)
+                                 : filename;
+
+          fsFiles[hash] = fullPath;
+        }
+      }
+    }
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error iterating storage directory: " + std::string(e.what()));
+    return;
+  }
+  LOG_INFO("Found " + std::to_string(fsFiles.size()) + " files in storage.");
+
+  // 2. Get all photos from DB
+  std::set<std::string> dbHashes;
+  std::vector<std::tuple<int, std::string, std::string>>
+      filesToCheck; // id, hash, path
+
+  sqlite3_stmt *stmt;
+  const char *sql = "SELECT id, hash, original_path FROM metadata";
+
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    LOG_ERROR("Failed to prepare integrity check statement");
+    return;
+  }
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    int id = sqlite3_column_int(stmt, 0);
+    const char *hashStr =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+    const char *pathStr =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
+
+    std::string hash = hashStr ? hashStr : "";
+    std::string path = pathStr ? pathStr : "";
+
+    if (!hash.empty()) {
+      dbHashes.insert(hash);
+      filesToCheck.emplace_back(id, hash, path);
+    }
+  }
+  sqlite3_finalize(stmt);
+
+  LOG_INFO("Checked " + std::to_string(filesToCheck.size()) +
+           " database records.");
+
+  // 3. Check for missing files and Repair
+  int missingCount = 0;
+  int repairedCount = 0;
+
+  sqlite3_stmt *updateStmt;
+  const char *updateSql = "UPDATE metadata SET original_path = ? WHERE id = ?";
+  if (sqlite3_prepare_v2(db_, updateSql, -1, &updateStmt, nullptr) !=
+      SQLITE_OK) {
+    LOG_ERROR("Failed to prepare update statement");
+    return;
+  }
+
+  for (const auto &t : filesToCheck) {
+    int id = std::get<0>(t);
+    std::string hash = std::get<1>(t);
+    std::string path = std::get<2>(t);
+
+    bool exists = !path.empty() && fs::exists(path);
+
+    if (!exists) {
+      // Try to find by hash
+      if (fsFiles.count(hash)) {
+        std::string newPath = fsFiles[hash];
+        LOG_WARN("Repaired missing path for photo ID " + std::to_string(id) +
+                 ". Old: '" + path + "', New: '" + newPath + "'");
+
+        sqlite3_bind_text(updateStmt, 1, newPath.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(updateStmt, 2, id);
+        if (sqlite3_step(updateStmt) == SQLITE_DONE) {
+          repairedCount++;
+        } else {
+          LOG_ERROR("Failed to update path in DB");
+        }
+        sqlite3_reset(updateStmt);
+      } else {
+        LOG_WARN("Missing file for photo ID " + std::to_string(id) +
+                 " [Hash: " + hash + "]: " + path);
+        missingCount++;
+      }
+    }
+  }
+  sqlite3_finalize(updateStmt);
+
+  if (repairedCount > 0) {
+    LOG_INFO("Successfully repaired " + std::to_string(repairedCount) +
+             " photo paths.");
+  }
+
+  if (missingCount == 0) {
+    LOG_INFO("No missing files found (after repair).");
+  } else {
+    LOG_WARN("Found " + std::to_string(missingCount) +
+             " missing files in storage.");
+  }
+
+  // 4. Check for orphaned files
+  int orphanedCount = 0;
+  for (const auto &pair : fsFiles) {
+    if (dbHashes.find(pair.first) == dbHashes.end()) {
+      LOG_WARN("Orphaned file found: " + pair.second);
+      orphanedCount++;
+    }
+  }
+
+  if (orphanedCount == 0) {
+    LOG_INFO("No orphaned files found.");
+  } else {
+    LOG_WARN("Found " + std::to_string(orphanedCount) +
+             " orphaned files in storage.");
+  }
+
+  LOG_INFO("Storage integrity check completed.");
 }

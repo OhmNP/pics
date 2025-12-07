@@ -2,6 +2,7 @@
 
 #include "ConfigManager.h"
 #include "DatabaseManager.h"
+#include <crow.h>
 #include <map>
 #include <mutex>
 #include <string>
@@ -52,4 +53,11 @@ private:
 
   // Authentication middleware
   bool validateSession(const std::string &authHeader, int &userId);
+
+  // Media grid endpoints
+  std::string handleGetMedia(int offset, int limit, int clientId,
+                             const std::string &startDate,
+                             const std::string &endDate);
+  void handleGetThumbnail(crow::response &res, int photoId);
+  void handleGetMediaDownload(crow::response &res, int photoId);
 };

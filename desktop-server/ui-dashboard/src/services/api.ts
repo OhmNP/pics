@@ -68,6 +68,27 @@ export interface ValidateResponse {
     expiresAt?: string;
 }
 
+export interface MediaItem {
+    id: number;
+    filename: string;
+    thumbnailUrl: string;
+    fullUrl: string;
+    mimeType: string;
+    size: number;
+    uploadedAt: string;
+    clientId: number;
+}
+
+export interface MediaResponse {
+    items: MediaItem[];
+    pagination: {
+        offset: number;
+        limit: number;
+        total: number;
+        hasMore: boolean;
+    };
+}
+
 export const api = {
     // Authentication
     login: (username: string, password: string) =>
@@ -84,4 +105,6 @@ export const api = {
     getSessions: (page = 1, limit = 50) => axios.get(`${API_BASE}/sessions`, { params: { page, limit } }),
     getConfig: () => axios.get<ServerConfig>(`${API_BASE}/config`),
     updateConfig: (config: Partial<ServerConfig>) => axios.post(`${API_BASE}/config`, config),
+    // Media grid
+    getMedia: (offset = 0, limit = 50, clientId = 0, startDate = '', endDate = '') => axios.get(`${API_BASE}/media`, { params: { offset, limit, clientId, startDate, endDate } }),
 };
