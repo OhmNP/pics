@@ -368,13 +368,29 @@ Press `Ctrl+C` in the server window
 ✅ **Multi-client** - Handles multiple Android devices simultaneously  
 ✅ **Session Tracking** - Tracks sync sessions and progress  
 ✅ **Logging** - Comprehensive logging with multiple levels  
+✅ **REST API** - HTTP API for dashboard integration  
 
 ### Coming Soon
 
 ⏳ **Actual File Transfer** - Phase 3 will add photo file reception  
 ⏳ **Deduplication** - Hash-based duplicate detection  
 ⏳ **Resume Capability** - Resume interrupted transfers  
-⏳ **Web Dashboard** - Monitor server status via browser  
+⏳ **Web Dashboard** - Admin dashboard with authentication (see dashboard features below)  
+
+### Dashboard Features (Planned)
+
+🎯 **Admin Authentication** - Secure login with bcrypt password hashing  
+🎯 **Client Management** - View all connected devices with real-time status  
+🎯 **Media Browser** - Search and filter photos/videos with thumbnails  
+🎯 **Storage Monitoring** - Real-time storage usage and trends  
+🎯 **QR Code Pairing** - Easy client registration with QR codes  
+🎯 **System Health** - Monitor server health and background jobs  
+🎯 **Error Feed** - Real-time error and warning notifications  
+🎯 **Audit Logging** - Track all admin actions for compliance  
+🎯 **Settings Management** - Configure server settings from dashboard  
+🎯 **Thumbnail Management** - Generate and regenerate media thumbnails  
+
+For detailed dashboard feature specifications, see `docs/requests/2025-12-06-dashboard-*.md`  
 
 ---
 

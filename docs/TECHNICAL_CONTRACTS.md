@@ -17,20 +17,23 @@ CREATE TABLE clients (
 );
 ```
 
-### `photos`
-Registry of all stored files.
+### `metadata`
+Registry of all stored files (renamed from `photos` to support multiple media types).
 ```sql
-CREATE TABLE photos (
+CREATE TABLE metadata (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     client_id INTEGER,
     filename TEXT,
     size INTEGER,               -- Bytes
     hash TEXT UNIQUE,           -- SHA-256 for deduplication
     file_path TEXT,             -- Relative path in storage
+    mime_type TEXT,             -- MIME type (e.g., image/jpeg, video/mp4)
     received_at TIMESTAMP,
     FOREIGN KEY(client_id) REFERENCES clients(id)
 );
-CREATE INDEX idx_photos_hash ON photos(hash);
+CREATE INDEX idx_metadata_hash ON metadata(hash);
+CREATE INDEX idx_metadata_client_timestamp ON metadata(client_id, received_at);
+CREATE INDEX idx_metadata_mime_type ON metadata(mime_type);
 ```
 
 ### `sync_sessions`
@@ -45,6 +48,90 @@ CREATE TABLE sync_sessions (
     status TEXT,                -- 'active', 'completed', 'failed'
     FOREIGN KEY(client_id) REFERENCES clients(id)
 );
+```
+
+### `admin_users`
+Admin users for dashboard authentication.
+```sql
+CREATE TABLE admin_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,        -- bcrypt hash
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_login TIMESTAMP,
+    is_active BOOLEAN DEFAULT 1
+);
+```
+
+### `sessions`
+Server-side session storage for admin authentication.
+```sql
+CREATE TABLE sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_token TEXT UNIQUE NOT NULL, -- 32-byte random, hex-encoded
+    user_id INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    ip_address TEXT,
+    FOREIGN KEY(user_id) REFERENCES admin_users(id)
+);
+CREATE INDEX idx_sessions_token ON sessions(session_token);
+CREATE INDEX idx_sessions_expires ON sessions(expires_at);
+```
+
+### `pairing_tokens`
+One-time tokens for pairing new Android clients.
+```sql
+CREATE TABLE pairing_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT UNIQUE NOT NULL,        -- 32-byte random, base64url-encoded
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP,
+    used_by_client_id INTEGER,
+    is_active BOOLEAN DEFAULT 1,
+    FOREIGN KEY(used_by_client_id) REFERENCES clients(id)
+);
+CREATE INDEX idx_pairing_tokens_token ON pairing_tokens(token);
+CREATE INDEX idx_pairing_tokens_expires ON pairing_tokens(expires_at);
+```
+
+### `logs`
+System logs for errors, warnings, and informational messages.
+```sql
+CREATE TABLE logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    severity TEXT NOT NULL,             -- 'error', 'warning', 'info'
+    message TEXT NOT NULL,
+    details TEXT,                       -- JSON with additional context
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    client_id INTEGER,
+    component TEXT,                     -- 'server', 'sync', 'api', 'auth'
+    FOREIGN KEY(client_id) REFERENCES clients(id)
+);
+CREATE INDEX idx_logs_severity ON logs(severity);
+CREATE INDEX idx_logs_timestamp ON logs(timestamp DESC);
+CREATE INDEX idx_logs_client ON logs(client_id);
+```
+
+### `audit_logs`
+Audit trail for all admin actions and client interactions.
+```sql
+CREATE TABLE audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    user_id INTEGER,                    -- Admin user who performed action
+    action TEXT NOT NULL,               -- Action type
+    target_type TEXT,                   -- 'client', 'media', 'settings', 'token'
+    target_id INTEGER,                  -- ID of affected resource
+    details TEXT,                       -- JSON with additional context
+    ip_address TEXT,
+    status TEXT,                        -- 'success', 'failed'
+    FOREIGN KEY(user_id) REFERENCES admin_users(id)
+);
+CREATE INDEX idx_audit_logs_timestamp ON audit_logs(timestamp DESC);
+CREATE INDEX idx_audit_logs_user ON audit_logs(user_id);
+CREATE INDEX idx_audit_logs_action ON audit_logs(action);
 ```
 
 ---
@@ -144,10 +231,246 @@ List of all known devices.
 ```
 
 #### `GET /api/config`
-Current server configuration.
+Current server configuration (loaded from `server.conf`).
 ```json
 {
-  "network": { "port": 50505 ... },
-  "storage": { "photosDir": "./storage/photos" ... }
+  "network": {
+    "port": 50505,
+    "udpBroadcastInterval": 5000
+  },
+  "storage": {
+    "photosDir": "./storage/photos",
+    "thumbnailsDir": "./storage/thumbnails",
+    "maxStorageGB": 100,
+    "thumbnailSize": 256
+  },
+  "auth": {
+    "sessionTimeoutSeconds": 60,
+    "bcryptCost": 12
+  },
+  "retention": {
+    "logRetentionDays": 30,
+    "auditLogRetentionDays": 90
+  },
+  "ui": {
+    "defaultPageSize": 50,
+    "autoRefreshInterval": 30
+  }
 }
 ```
+
+#### `PUT /api/config`
+Update server configuration (applies dynamically without restart).
+**Request Body**: Same structure as GET response.
+**Response**: Updated configuration.
+
+---
+
+### Authentication Endpoints
+
+#### `POST /api/auth/login`
+Authenticate admin user and create session.
+**Request**:
+```json
+{
+  "username": "admin",
+  "password": "password123"
+}
+```
+**Response**:
+```json
+{
+  "sessionToken": "abc123...",
+  "expiresAt": "2025-12-06T10:01:00Z",
+  "user": {
+    "id": 1,
+    "username": "admin"
+  }
+}
+```
+
+#### `POST /api/auth/logout`
+Invalidate current session.
+**Headers**: `Authorization: Bearer {sessionToken}`
+**Response**: `{"success": true}`
+
+#### `GET /api/auth/validate`
+Validate current session token.
+**Headers**: `Authorization: Bearer {sessionToken}`
+**Response**:
+```json
+{
+  "valid": true,
+  "expiresAt": "2025-12-06T10:01:00Z"
+}
+```
+
+---
+
+### Client Management Endpoints
+
+#### `GET /api/clients/{client_id}`
+Get detailed information for a specific client.
+**Response**:
+```json
+{
+  "client": {
+    "id": 1,
+    "deviceId": "android_123",
+    "lastSeen": "2025-12-06T10:00:00Z",
+    "photoCount": 500,
+    "storageUsed": 2048000,
+    "isOnline": true,
+    "firstSeen": "2025-01-01T00:00:00Z"
+  },
+  "recentUploads": {
+    "items": [...],
+    "pagination": {...}
+  },
+  "storageStats": {...}
+}
+```
+
+#### `GET /api/clients/{client_id}/uploads`
+Get paginated upload history for a client.
+**Query Parameters**: `page`, `limit`
+**Response**: Paginated list of uploads.
+
+---
+
+### Storage Endpoints
+
+#### `GET /api/storage/overview`
+Get aggregated storage statistics.
+**Response**:
+```json
+{
+  "totalStorageUsed": 4500000000,
+  "totalFiles": 1502,
+  "storageLimit": 107374182400,
+  "utilizationPercent": 4.19,
+  "byClient": [...],
+  "byFileType": {...}
+}
+```
+
+---
+
+### Media Endpoints
+
+#### `GET /api/media`
+Get paginated list of media files.
+**Query Parameters**: `client_id`, `limit`, `offset`, `start_date`, `end_date`
+**Response**: Paginated media list with thumbnail URLs.
+
+#### `GET /api/media/search`
+Search media with filters.
+**Query Parameters**: `client_id`, `start_date`, `end_date`, `mime_type`, `filename`, `limit`, `offset`
+**Response**: Filtered and paginated media list.
+
+#### `GET /api/thumbnails/{id}`
+Get thumbnail for a media file.
+**Response**: Image binary (JPEG) with cache-control headers.
+
+#### `GET /api/media/{id}/download`
+Download full-size media file.
+**Response**: Media binary with appropriate MIME type.
+
+---
+
+### Pairing Token Endpoints
+
+#### `POST /api/tokens/generate`
+Generate new pairing token.
+**Response**:
+```json
+{
+  "token": "Xy9kL3mN8pQ2rS4tU6vW7xY8zA1bC3dE5fG7hI9jK0lM2nO4pQ6rS8tU0vW2xY4zA",
+  "qrCodeData": "photosync://pair?token=...&server=192.168.1.100:50505",
+  "expiresAt": "2025-12-06T10:15:00Z",
+  "expiresInSeconds": 900
+}
+```
+
+#### `GET /api/tokens`
+List all pairing tokens.
+**Response**: Array of tokens with status.
+
+#### `POST /api/tokens/validate`
+Validate pairing token (used by Android client).
+**Request**: `{"token": "..."}`
+**Response**: `{"valid": true, "clientCredentials": {...}}`
+
+#### `DELETE /api/tokens/{token_id}`
+Revoke active pairing token.
+**Response**: `{"success": true}`
+
+---
+
+### Thumbnail Management Endpoints
+
+#### `POST /api/thumbnails/regenerate`
+Trigger thumbnail regeneration job.
+**Request**:
+```json
+{
+  "clientId": 1,
+  "mediaIds": [123, 456],
+  "force": false
+}
+```
+**Response**:
+```json
+{
+  "jobId": "job_abc123",
+  "status": "queued",
+  "totalItems": 2
+}
+```
+
+#### `GET /api/thumbnails/status/{job_id}`
+Get thumbnail regeneration job status.
+**Response**: Job progress and status.
+
+---
+
+### Logging Endpoints
+
+#### `GET /api/logs`
+Get system logs with filtering.
+**Query Parameters**: `level` (error,warning,info), `client_id`, `limit`, `offset`
+**Response**: Paginated log entries.
+
+---
+
+### Health Endpoints
+
+#### `GET /api/health`
+Get server health metrics.
+**Response**:
+```json
+{
+  "uptime": 86400,
+  "storage": {...},
+  "queue": {...},
+  "system": {
+    "cpu": null,
+    "ram": null,
+    "note": "Placeholder for future"
+  }
+}
+```
+
+---
+
+### Audit Endpoints
+
+#### `GET /api/audit`
+Get audit logs with filtering.
+**Query Parameters**: `start_date`, `end_date`, `user_id`, `action`, `limit`, `offset`
+**Response**: Paginated audit log entries.
+
+#### `GET /api/audit/export`
+Export audit logs as JSON.
+**Query Parameters**: `start_date`, `end_date`
+**Response**: JSON file download.

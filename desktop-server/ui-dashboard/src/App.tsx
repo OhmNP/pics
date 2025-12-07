@@ -6,11 +6,15 @@ import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
 import PeopleIcon from '@mui/icons-material/People';
 import SyncIcon from '@mui/icons-material/Sync';
 import SettingsIcon from '@mui/icons-material/Settings';
+import LogoutIcon from '@mui/icons-material/Logout';
 import Dashboard from './components/Dashboard';
 import Photos from './components/Photos';
 import Clients from './components/Clients';
 import Sessions from './components/Sessions';
 import Settings from './components/Settings';
+import Login from './components/Login';
+import ProtectedRoute from './components/ProtectedRoute';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 
 // Create a dark theme instance to ensure MUI components play nice with our custom CSS
 const darkTheme = createTheme({
@@ -39,6 +43,12 @@ const navItems: NavItem[] = [
 function Navigation() {
     const navigate = useNavigate();
     const location = useLocation();
+    const { logout, user } = useAuth();
+
+    const handleLogout = async () => {
+        await logout();
+        navigate('/login');
+    };
 
     return (
         <nav style={{
@@ -60,9 +70,14 @@ function Navigation() {
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.25rem' }}>
                     Professional Suite
                 </p>
+                {user && (
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: '0.5rem' }}>
+                        Logged in as <strong style={{ color: 'var(--primary)' }}>{user.username}</strong>
+                    </p>
+                )}
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', flex: 1 }}>
                 {navItems.map((item) => {
                     const isActive = location.pathname === item.path;
                     return (
@@ -89,6 +104,30 @@ function Navigation() {
                         </div>
                     );
                 })}
+            </div>
+
+            {/* Logout button */}
+            <div
+                onClick={handleLogout}
+                style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '1rem',
+                    padding: '0.875rem 1rem',
+                    borderRadius: '12px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                    background: 'transparent',
+                    color: 'var(--text-secondary)',
+                    borderTop: '1px solid var(--border-subtle)',
+                    marginTop: '1rem',
+                    paddingTop: '1.5rem'
+                }}
+            >
+                <span style={{ display: 'flex', alignItems: 'center' }}>
+                    <LogoutIcon />
+                </span>
+                <span style={{ fontWeight: 500 }}>Logout</span>
             </div>
         </nav>
     );
@@ -146,7 +185,16 @@ export default function App() {
     return (
         <ThemeProvider theme={darkTheme}>
             <BrowserRouter>
-                <AppContent />
+                <AuthProvider>
+                    <Routes>
+                        <Route path="/login" element={<Login />} />
+                        <Route path="/*" element={
+                            <ProtectedRoute>
+                                <AppContent />
+                            </ProtectedRoute>
+                        } />
+                    </Routes>
+                </AuthProvider>
             </BrowserRouter>
         </ThemeProvider>
     );

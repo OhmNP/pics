@@ -2,6 +2,29 @@ import axios from 'axios';
 
 const API_BASE = 'http://localhost:50506/api';
 
+// Add request interceptor to include auth token
+axios.interceptors.request.use((config) => {
+    const token = localStorage.getItem('sessionToken');
+    if (token && config.url?.startsWith(API_BASE)) {
+        config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+});
+
+// Add response interceptor to handle 401 errors
+axios.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        if (error.response?.status === 401) {
+            // Session expired or invalid
+            localStorage.removeItem('sessionToken');
+            localStorage.removeItem('user');
+            window.location.href = '/login';
+        }
+        return Promise.reject(error);
+    }
+);
+
 export interface ServerStats {
     totalPhotos: number;
     connectedClients: number;
@@ -31,7 +54,30 @@ export interface ServerConfig {
     };
 }
 
+export interface LoginResponse {
+    sessionToken: string;
+    expiresAt: string;
+    user: {
+        id: number;
+        username: string;
+    };
+}
+
+export interface ValidateResponse {
+    valid: boolean;
+    expiresAt?: string;
+}
+
 export const api = {
+    // Authentication
+    login: (username: string, password: string) =>
+        axios.post<LoginResponse>(`${API_BASE}/auth/login`, { username, password }),
+    logout: (token: string) =>
+        axios.post(`${API_BASE}/auth/logout`, {}, { headers: { Authorization: `Bearer ${token}` } }),
+    validateSession: (token: string) =>
+        axios.get<ValidateResponse>(`${API_BASE}/auth/validate`, { headers: { Authorization: `Bearer ${token}` } }),
+
+    // Server data
     getStats: () => axios.get<ServerStats>(`${API_BASE}/stats`),
     getPhotos: (page = 1, limit = 50) => axios.get(`${API_BASE}/photos`, { params: { page, limit } }),
     getClients: () => axios.get(`${API_BASE}/clients`),

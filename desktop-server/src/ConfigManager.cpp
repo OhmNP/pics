@@ -120,3 +120,27 @@ bool ConfigManager::getConsoleOutput() const {
   }
   return DEFAULT_CONSOLE_OUTPUT;
 }
+
+// Authentication configuration getters
+int ConfigManager::getSessionTimeoutSeconds() const {
+  auto it = config_.find("auth.session_timeout_seconds");
+  return (it != config_.end()) ? std::stoi(it->second)
+                               : DEFAULT_SESSION_TIMEOUT;
+}
+
+int ConfigManager::getBcryptCost() const {
+  auto it = config_.find("auth.bcrypt_cost");
+  return (it != config_.end()) ? std::stoi(it->second) : DEFAULT_BCRYPT_COST;
+}
+
+int ConfigManager::getMaxFailedAttempts() const {
+  auto it = config_.find("auth.max_failed_attempts");
+  return (it != config_.end()) ? std::stoi(it->second)
+                               : DEFAULT_MAX_FAILED_ATTEMPTS;
+}
+
+int ConfigManager::getLockoutDurationMinutes() const {
+  auto it = config_.find("auth.lockout_duration_minutes");
+  return (it != config_.end()) ? std::stoi(it->second)
+                               : DEFAULT_LOCKOUT_DURATION;
+}

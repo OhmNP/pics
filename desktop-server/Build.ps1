@@ -1,6 +1,6 @@
 ﻿# PhotoSync Build Script
 param(
-    [string]$VcpkgPath = "C:\Users\parim\Desktop\vcpkg",
+    [string]$VcpkgPath = "C:\Users\parim\source\repos\vcpkg",
     [switch]$SkipUI
 )
 $ErrorActionPreference = "Stop"

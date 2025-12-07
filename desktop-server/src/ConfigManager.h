@@ -3,7 +3,6 @@
 #include <map>
 #include <string>
 
-
 class ConfigManager {
 public:
   static ConfigManager &getInstance();
@@ -21,6 +20,12 @@ public:
   std::string getLogLevel() const;
   std::string getLogFile() const;
   bool getConsoleOutput() const;
+
+  // Authentication settings
+  int getSessionTimeoutSeconds() const;
+  int getBcryptCost() const;
+  int getMaxFailedAttempts() const;
+  int getLockoutDurationMinutes() const;
 
 private:
   ConfigManager() = default;
@@ -43,4 +48,10 @@ private:
   const std::string DEFAULT_LOG_LEVEL = "INFO";
   const std::string DEFAULT_LOG_FILE = "./server.log";
   const bool DEFAULT_CONSOLE_OUTPUT = true;
+
+  // Authentication defaults
+  const int DEFAULT_SESSION_TIMEOUT = 3600; // 1 hour
+  const int DEFAULT_BCRYPT_COST = 12;       // 4096 iterations
+  const int DEFAULT_MAX_FAILED_ATTEMPTS = 5;
+  const int DEFAULT_LOCKOUT_DURATION = 15; // minutes
 };

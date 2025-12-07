@@ -5,9 +5,12 @@
 #include "Logger.h"
 #include "TcpListener.h"
 #include "UdpBroadcaster.h"
+#include <atomic>
 #include <boost/asio.hpp>
 #include <csignal>
 #include <iostream>
+#include <thread>
+
 
 // Undefine Windows macros that conflict with our enums
 #ifdef ERROR
@@ -111,8 +114,34 @@ int main(int argc, char *argv[]) {
       LOG_INFO("Photo transfer enabled with SHA-256 verification");
       LOG_INFO("Press Ctrl+C to shutdown");
 
+      // Start background session cleanup thread
+      std::atomic<bool> cleanupRunning(true);
+      std::thread cleanupThread([&db, &cleanupRunning]() {
+        while (cleanupRunning) {
+          std::this_thread::sleep_for(std::chrono::minutes(5));
+          if (!cleanupRunning)
+            break;
+
+          try {
+            int cleaned = db.cleanupExpiredSessions();
+            if (cleaned > 0) {
+              LOG_INFO("Cleaned up " + std::to_string(cleaned) +
+                       " expired sessions");
+            }
+          } catch (const std::exception &e) {
+            LOG_ERROR("Session cleanup error: " + std::string(e.what()));
+          }
+        }
+      });
+
       // Run the IO context
       io_context.run();
+
+      // Stop cleanup thread
+      cleanupRunning = false;
+      if (cleanupThread.joinable()) {
+        cleanupThread.join();
+      }
     } catch (const std::exception &e) {
       LOG_FATAL("Failed to start or run server components: " +
                 std::string(e.what()));

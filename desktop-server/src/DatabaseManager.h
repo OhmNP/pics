@@ -20,6 +20,24 @@ struct SyncSession {
   std::string status;
 };
 
+struct AdminUser {
+  int id;
+  std::string username;
+  std::string passwordHash;
+  std::string createdAt;
+  std::string lastLogin;
+  bool isActive;
+};
+
+struct AuthSession {
+  int id;
+  std::string sessionToken;
+  int userId;
+  std::string createdAt;
+  std::string expiresAt;
+  std::string ipAddress;
+};
+
 class DatabaseManager {
 public:
   DatabaseManager();
@@ -61,6 +79,28 @@ public:
   long long getTotalStorageUsed();
 
   std::string getCurrentTimestamp();
+
+  // Authentication operations
+  bool createAdminUser(const std::string &username,
+                       const std::string &passwordHash);
+  AdminUser getAdminUserByUsername(const std::string &username);
+  bool createAuthSession(const std::string &sessionToken, int userId,
+                         const std::string &expiresAt,
+                         const std::string &ipAddress = "");
+  AuthSession getSessionByToken(const std::string &sessionToken);
+  bool deleteSession(const std::string &sessionToken);
+  int cleanupExpiredSessions();
+  bool insertInitialAdminUser();
+
+  // Password reset operations
+  bool createPasswordResetToken(const std::string &username,
+                                const std::string &token,
+                                const std::string &expiresAt);
+  bool validatePasswordResetToken(const std::string &token);
+  std::string getUsernameFromResetToken(const std::string &token);
+  bool resetPassword(const std::string &token,
+                     const std::string &newPasswordHash);
+  int cleanupExpiredResetTokens();
 
 private:
   sqlite3 *db_;

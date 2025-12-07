@@ -2,6 +2,8 @@
 
 #include "ConfigManager.h"
 #include "DatabaseManager.h"
+#include <map>
+#include <mutex>
 #include <string>
 
 // REST API Server for UI Dashboard
@@ -25,6 +27,11 @@ private:
   ConfigManager &config_;
   bool running_;
 
+  // Rate limiting for login attempts
+  std::map<std::string, std::pair<int, time_t>>
+      loginAttempts_; // IP -> (count, last_attempt_time)
+  std::mutex loginAttemptsMutex_;
+
   // API endpoint handlers
   void setupRoutes();
   std::string handleGetStats();
@@ -37,4 +44,12 @@ private:
   std::string handleGetConnections();
   std::string handleGetConfig();
   std::string handlePostConfig(const std::string &requestBody);
+
+  // Authentication endpoint handlers
+  std::string handlePostLogin(const std::string &requestBody);
+  std::string handlePostLogout(const std::string &authHeader);
+  std::string handleGetValidate(const std::string &authHeader);
+
+  // Authentication middleware
+  bool validateSession(const std::string &authHeader, int &userId);
 };

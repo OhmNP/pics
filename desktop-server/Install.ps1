@@ -30,7 +30,7 @@ function Write-Success {
 }
 
 # Get server path
-$serverPath = $PSScriptRoot
+#$serverPath = $PSScriptRoot
 
 # Check if files are built
 if (-not (Test-Path "build\Release\PhotoSyncServer.exe")) {

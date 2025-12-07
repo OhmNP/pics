@@ -1,4 +1,5 @@
 #include "ApiServer.h"
+#include "AuthenticationManager.h"
 #include "ConnectionManager.h"
 #include "Logger.h"
 #include <crow.h>
@@ -184,6 +185,36 @@ void ApiServer::setupRoutes() {
   CROW_ROUTE((*g_app), "/api/config")
       .methods("POST"_method)([this](const crow::request &req) {
         auto res = crow::response(handlePostConfig(req.body));
+        res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Content-Type", "application/json");
+        return res;
+      });
+
+  // Authentication endpoints
+  // POST /api/auth/login - User login
+  CROW_ROUTE((*g_app), "/api/auth/login")
+      .methods("POST"_method)([this](const crow::request &req) {
+        auto res = crow::response(handlePostLogin(req.body));
+        res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Content-Type", "application/json");
+        return res;
+      });
+
+  // POST /api/auth/logout - User logout
+  CROW_ROUTE((*g_app), "/api/auth/logout")
+      .methods("POST"_method)([this](const crow::request &req) {
+        std::string authHeader = req.get_header_value("Authorization");
+        auto res = crow::response(handlePostLogout(authHeader));
+        res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Content-Type", "application/json");
+        return res;
+      });
+
+  // GET /api/auth/validate - Validate session
+  CROW_ROUTE((*g_app), "/api/auth/validate")
+      .methods("GET"_method)([this](const crow::request &req) {
+        std::string authHeader = req.get_header_value("Authorization");
+        auto res = crow::response(handleGetValidate(authHeader));
         res.add_header("Access-Control-Allow-Origin", "*");
         res.add_header("Content-Type", "application/json");
         return res;
@@ -475,5 +506,231 @@ std::string ApiServer::handlePostConfig(const std::string &requestBody) {
     LOG_ERROR("Error in handlePostConfig: " + std::string(e.what()));
     json error = {{"error", e.what()}};
     return error.dump();
+  }
+}
+// Authentication endpoint implementations
+
+// POST /api/auth/login - User login
+std::string ApiServer::handlePostLogin(const std::string &requestBody) {
+  try {
+    auto requestData = json::parse(requestBody);
+
+    // Validate request
+    if (!requestData.contains("username") ||
+        !requestData.contains("password")) {
+      json error = {{"error", "Missing username or password"}};
+      return error.dump();
+    }
+
+    std::string username = requestData["username"];
+    std::string password = requestData["password"];
+
+    // Rate limiting check (use username as IP substitute for now)
+    // TODO: Extract actual client IP from request
+    std::string clientId = username; // In production, use IP address
+
+    {
+      std::lock_guard<std::mutex> lock(loginAttemptsMutex_);
+      auto it = loginAttempts_.find(clientId);
+      time_t now = std::time(nullptr);
+
+      if (it != loginAttempts_.end()) {
+        int attempts = it->second.first;
+        time_t lastAttempt = it->second.second;
+        int maxAttempts = config_.getMaxFailedAttempts();
+        int lockoutDuration =
+            config_.getLockoutDurationMinutes() * 60; // Convert to seconds
+
+        // Check if still in lockout period
+        if (attempts >= maxAttempts && (now - lastAttempt) < lockoutDuration) {
+          int remainingTime = lockoutDuration - (now - lastAttempt);
+          LOG_WARN("Login attempt during lockout for user: " + username);
+          json error = {{"error", "Too many failed attempts. Account locked."},
+                        {"retry_after", remainingTime}};
+          return error.dump();
+        }
+
+        // Reset if lockout period has passed
+        if ((now - lastAttempt) >= lockoutDuration) {
+          loginAttempts_.erase(it);
+        }
+      }
+    }
+
+    // Get user from database
+    AdminUser user = db_.getAdminUserByUsername(username);
+    if (user.id == -1) {
+      LOG_WARN("Login attempt for non-existent user: " + username);
+      json error = {{"error", "Invalid credentials"}};
+      return error.dump();
+    }
+
+    // Verify password
+    if (!AuthenticationManager::verifyPassword(password, user.passwordHash)) {
+      LOG_WARN("Failed login attempt for user: " + username);
+
+      // Track failed attempt
+      {
+        std::lock_guard<std::mutex> lock(loginAttemptsMutex_);
+        std::string clientId = username;
+        time_t now = std::time(nullptr);
+
+        auto it = loginAttempts_.find(clientId);
+        if (it != loginAttempts_.end()) {
+          it->second.first++;      // Increment attempt count
+          it->second.second = now; // Update last attempt time
+        } else {
+          loginAttempts_[clientId] = {1, now};
+        }
+      }
+
+      json error = {{"error", "Invalid credentials"}};
+      return error.dump();
+    }
+
+    // Clear failed attempts on successful login
+    {
+      std::lock_guard<std::mutex> lock(loginAttemptsMutex_);
+      loginAttempts_.erase(username);
+    }
+
+    // Generate session token
+    std::string sessionToken = AuthenticationManager::generateSessionToken();
+
+    // Calculate expiration using configured timeout
+    int sessionTimeout = config_.getSessionTimeoutSeconds();
+    std::string expiresAt =
+        AuthenticationManager::calculateExpiresAt(sessionTimeout);
+
+    // Create session in database
+    // TODO: Get client IP address from request
+    bool sessionCreated =
+        db_.createAuthSession(sessionToken, user.id, expiresAt, "");
+
+    if (!sessionCreated) {
+      LOG_ERROR("Failed to create session for user: " + username);
+      json error = {{"error", "Failed to create session"}};
+      return error.dump();
+    }
+
+    LOG_INFO("User logged in: " + username);
+
+    // Return success response
+    json response = {{"sessionToken", sessionToken},
+                     {"expiresAt", expiresAt},
+                     {"user", {{"id", user.id}, {"username", user.username}}}};
+
+    return response.dump();
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error in handlePostLogin: " + std::string(e.what()));
+    json error = {{"error", "Internal server error"}};
+    return error.dump();
+  }
+}
+
+// POST /api/auth/logout - User logout
+std::string ApiServer::handlePostLogout(const std::string &authHeader) {
+  try {
+    // Extract token from Authorization header
+    if (authHeader.empty() || authHeader.substr(0, 7) != "Bearer ") {
+      json error = {{"error", "Missing or invalid authorization header"}};
+      return error.dump();
+    }
+
+    std::string token = authHeader.substr(7);
+
+    // Delete session from database
+    bool deleted = db_.deleteSession(token);
+
+    if (!deleted) {
+      LOG_WARN("Logout attempt with invalid token");
+      json error = {{"error", "Invalid session"}};
+      return error.dump();
+    }
+
+    LOG_INFO("User logged out");
+
+    json response = {{"success", true}};
+    return response.dump();
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error in handlePostLogout: " + std::string(e.what()));
+    json error = {{"error", "Internal server error"}};
+    return error.dump();
+  }
+}
+
+// GET /api/auth/validate - Validate session
+std::string ApiServer::handleGetValidate(const std::string &authHeader) {
+  try {
+    int userId;
+    bool valid = validateSession(authHeader, userId);
+
+    if (valid) {
+      // Get session to return expiration time
+      if (authHeader.empty() || authHeader.substr(0, 7) != "Bearer ") {
+        json response = {{"valid", false}};
+        return response.dump();
+      }
+
+      std::string token = authHeader.substr(7);
+      AuthSession session = db_.getSessionByToken(token);
+
+      json response = {{"valid", true}, {"expiresAt", session.expiresAt}};
+      return response.dump();
+    } else {
+      json response = {{"valid", false}};
+      return response.dump();
+    }
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error in handleGetValidate: " + std::string(e.what()));
+    json response = {{"valid", false}};
+    return response.dump();
+  }
+}
+
+// Authentication middleware - validates session token
+bool ApiServer::validateSession(const std::string &authHeader, int &userId) {
+  try {
+    // Extract token from Authorization header
+    if (authHeader.empty() || authHeader.substr(0, 7) != "Bearer ") {
+      return false;
+    }
+
+    std::string token = authHeader.substr(7);
+
+    // Get session from database
+    AuthSession session = db_.getSessionByToken(token);
+    if (session.id == -1) {
+      return false;
+    }
+
+    // Check if session has expired
+    // Parse ISO8601 timestamp: "YYYY-MM-DDTHH:MM:SSZ"
+    std::tm expiresTime = {};
+    std::istringstream ss(session.expiresAt);
+    ss >> std::get_time(&expiresTime, "%Y-%m-%dT%H:%M:%SZ");
+
+    if (ss.fail()) {
+      LOG_ERROR("Failed to parse session expiration time: " +
+                session.expiresAt);
+      return false;
+    }
+
+    // Convert to time_t for comparison
+    time_t expiresTimestamp = std::mktime(&expiresTime);
+    time_t currentTimestamp = std::time(nullptr);
+
+    // Check if session has expired
+    if (currentTimestamp >= expiresTimestamp) {
+      LOG_DEBUG("Session expired for user ID: " +
+                std::to_string(session.userId));
+      return false;
+    }
+
+    userId = session.userId;
+    return true;
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error in validateSession: " + std::string(e.what()));
+    return false;
   }
 }
