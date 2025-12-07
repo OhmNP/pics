@@ -45,6 +45,10 @@ private:
   std::string handleGetConnections();
   std::string handleGetConfig();
   std::string handlePostConfig(const std::string &requestBody);
+  std::string handleGetHealth();
+  std::string handleGetStorageOverview();
+
+  std::string handleGetLogs();
 
   // Authentication endpoint handlers
   std::string handlePostLogin(const std::string &requestBody);

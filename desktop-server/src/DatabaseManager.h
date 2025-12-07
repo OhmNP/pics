@@ -1,9 +1,11 @@
 #pragma once
 
+#include <map>
 #include <memory>
 #include <sqlite3.h>
 #include <string>
 #include <vector>
+
 
 struct PhotoMetadata {
   int id = -1;
@@ -68,6 +70,14 @@ public:
   };
   std::vector<ClientRecord> getClients();
 
+  struct StorageStats {
+    long long totalStorageUsed;
+    int totalFiles;
+    std::map<int, long long> clientStorage;
+    std::map<std::string, long long> mimeTypeStorage;
+  };
+  StorageStats getStorageStats();
+
   // Session operations
   int createSession(int clientId);
   void updateSessionPhotosReceived(int sessionId, int photosReceived);
@@ -125,6 +135,26 @@ public:
   bool resetPassword(const std::string &token,
                      const std::string &newPasswordHash);
   int cleanupExpiredResetTokens();
+
+  struct LogEntry {
+    int id;
+    std::string level;
+    std::string message;
+    std::string timestamp;
+    std::string context;
+    bool read;
+  };
+
+  // Log operations
+  bool createLog(const std::string &level, const std::string &message,
+                 const std::string &context = "");
+  std::vector<LogEntry> getLogs(int limit = 50, int offset = 0,
+                                const std::string &level = "",
+                                bool onlyUnread = false);
+  int getUnreadLogCount();
+  bool markLogAsRead(int logId);
+  bool markAllLogsAsRead();
+  int cleanupOldLogs(int daysToKeep);
 
 private:
   sqlite3 *db_;

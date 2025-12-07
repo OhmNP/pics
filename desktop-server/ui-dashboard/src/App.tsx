@@ -7,12 +7,18 @@ import PeopleIcon from '@mui/icons-material/People';
 import SyncIcon from '@mui/icons-material/Sync';
 import SettingsIcon from '@mui/icons-material/Settings';
 import LogoutIcon from '@mui/icons-material/Logout';
+import DnsIcon from '@mui/icons-material/Dns';
+import ErrorIcon from '@mui/icons-material/Error';
+import StorageIcon from '@mui/icons-material/Storage';
 import Dashboard from './components/Dashboard';
 import Photos from './components/Photos';
 import Clients from './components/Clients';
 import Sessions from './components/Sessions';
 import Settings from './components/Settings';
 import Login from './components/Login';
+import ServerHealth from './components/ServerHealth';
+import StorageOverview from './components/StorageOverview';
+import ErrorFeed from './components/ErrorFeed';
 import ProtectedRoute from './components/ProtectedRoute';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 
@@ -37,6 +43,9 @@ const navItems: NavItem[] = [
     { text: 'Photos', icon: <PhotoLibraryIcon />, path: '/photos' },
     { text: 'Clients', icon: <PeopleIcon />, path: '/clients' },
     { text: 'Sessions', icon: <SyncIcon />, path: '/sessions' },
+    { text: 'Health', icon: <DnsIcon />, path: '/health' },
+    { text: 'Storage', icon: <StorageIcon />, path: '/storage' },
+    { text: 'Logs', icon: <ErrorIcon />, path: '/logs' }, // ErrorIcon needs import
     { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
 ];
 
@@ -173,6 +182,9 @@ function AppContent() {
                         <Route path="/photos" element={<Photos />} />
                         <Route path="/clients" element={<Clients />} />
                         <Route path="/sessions" element={<Sessions />} />
+                        <Route path="/health" element={<ServerHealth />} />
+                        <Route path="/storage" element={<StorageOverview />} />
+                        <Route path="/logs" element={<ErrorFeed />} />
                         <Route path="/settings" element={<Settings />} />
                     </Routes>
                 </div>
