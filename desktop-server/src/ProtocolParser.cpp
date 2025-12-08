@@ -33,7 +33,7 @@ ParsedCommand ProtocolParser::parse(const std::string &message) {
     cmd.type = CommandType::PHOTO_METADATA;
     cmd.photo = parsePhotoMetadata(message);
     if (cmd.photo.filename.empty()) {
-        cmd.type = CommandType::UNKNOWN;
+      cmd.type = CommandType::UNKNOWN;
     }
   } else if (command == "DATA_TRANSFER") {
     cmd.type = CommandType::DATA_TRANSFER;
@@ -41,14 +41,24 @@ ParsedCommand ProtocolParser::parse(const std::string &message) {
       try {
         cmd.dataSize = std::stoll(parts[1]);
       } catch (const std::exception &) {
-         LOG_ERROR("Invalid data size: " + parts[1]);
-         cmd.type = CommandType::UNKNOWN;
+        LOG_ERROR("Invalid data size: " + parts[1]);
+        cmd.type = CommandType::UNKNOWN;
       }
     }
   } else if (command == "RESUME_UPLOAD") {
     cmd.type = CommandType::RESUME_UPLOAD;
     if (parts.size() > 1) {
       cmd.hash = parts[1];
+    }
+  } else if (command == "BATCH_CHECK") { // NEW
+    cmd.type = CommandType::BATCH_CHECK;
+    if (parts.size() > 1) {
+      try {
+        cmd.batchCheckCount = std::stoi(parts[1]);
+      } catch (const std::exception &) {
+        LOG_ERROR("Invalid batch check count: " + parts[1]);
+        cmd.type = CommandType::UNKNOWN;
+      }
     }
   } else if (command == "BATCH_END") {
     cmd.type = CommandType::BATCH_END;
@@ -66,12 +76,12 @@ PhotoMetadata ProtocolParser::parsePhotoMetadata(const std::string &line) {
   if (parts.size() >= 4) {
     photo.filename = parts[1];
     try {
-        photo.size = std::stoll(parts[2]);
-        photo.hash = parts[3];
+      photo.size = std::stoll(parts[2]);
+      photo.hash = parts[3];
     } catch (const std::exception &) {
-        LOG_ERROR("Invalid photo size: " + parts[2]);
-        // Return empty filename to indicate error
-        photo.filename = ""; 
+      LOG_ERROR("Invalid photo size: " + parts[2]);
+      // Return empty filename to indicate error
+      photo.filename = "";
     }
   }
 
@@ -97,6 +107,10 @@ std::string ProtocolParser::createSendResponse(long long offset) {
 }
 
 std::string ProtocolParser::createSkipResponse() { return "SKIP\n"; }
+
+std::string ProtocolParser::createBatchResultResponse(int count) { // NEW
+  return "BATCH_RESULT " + std::to_string(count) + "\n";
+}
 
 std::string ProtocolParser::createError(const std::string &message) {
   return "ERROR " + message + "\n";

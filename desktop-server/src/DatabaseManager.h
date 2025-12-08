@@ -97,16 +97,20 @@ public:
                    const std::string &filePath = "");
   bool photoExists(const std::string &hash);
   int getPhotoCount(int clientId);
+  std::vector<std::string>
+  batchCheckHashes(const std::vector<std::string> &hashes);
 
   // Media grid operations
   std::vector<PhotoMetadata>
   getPhotosWithPagination(int offset, int limit, int clientId = -1,
                           const std::string &startDate = "",
-                          const std::string &endDate = "");
+                          const std::string &endDate = "",
+                          const std::string &searchQuery = "");
   PhotoMetadata getPhotoById(int photoId);
   int getFilteredPhotoCount(int clientId = -1,
                             const std::string &startDate = "",
-                            const std::string &endDate = "");
+                            const std::string &endDate = "",
+                            const std::string &searchQuery = "");
 
   // API Statistics Methods
   int getTotalPhotoCount();
@@ -169,6 +173,25 @@ public:
   bool markLogAsRead(int logId);
   bool markAllLogsAsRead();
   int cleanupOldLogs(int daysToKeep);
+
+  struct AuditLogEntry {
+    int id;
+    int userId;
+    std::string username;
+    std::string action;
+    std::string targetType;
+    std::string targetId;
+    std::string details;
+    std::string timestamp;
+    std::string ipAddress;
+  };
+
+  // Audit Log operations
+  bool logActivity(int userId, const std::string &action,
+                   const std::string &targetType, const std::string &targetId,
+                   const std::string &details, const std::string &ipAddress);
+  std::vector<AuditLogEntry> getAuditLogs(int limit = 50, int offset = 0);
+  int getAuditLogCount();
 
 private:
   sqlite3 *db_;

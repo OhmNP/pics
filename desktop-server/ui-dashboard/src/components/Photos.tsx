@@ -31,9 +31,9 @@ export default function Photos() {
     const [viewerOpen, setViewerOpen] = useState(false);
 
     const fetchPhotos = useCallback(async (offset: number, limit: number) => {
-        const response = await api.getMedia(offset, limit, clientFilter >= 0 ? clientFilter : undefined);
+        const response = await api.getMedia(offset, limit, clientFilter >= 0 ? clientFilter : undefined, undefined, undefined, searchTerm);
         return response.data;
-    }, [clientFilter]);
+    }, [clientFilter, searchTerm]);
 
     const {
         items: photos,
@@ -70,10 +70,8 @@ export default function Photos() {
         }
     };
 
-    // Filter photos by search term (client-side)
-    const filteredPhotos = photos.filter(photo =>
-        photo.filename.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    // Server-side search implemented
+    const filteredPhotos = photos;
 
     return (
         <Box p={3}>
@@ -88,7 +86,18 @@ export default function Photos() {
                     variant="outlined"
                     size="small"
                     value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onChange={(e) => {
+                        setSearchTerm(e.target.value);
+                        // Debounce logic would be better, but for now simple reset is okay
+                        // Actually, we shouldn't reset on every keystroke for infinite scroll if we don't debounce
+                        // But let's keep it simple: We'll modify useEffect to reset when searchTerm changes
+                    }}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                            reset();
+                        }
+                    }}
+                    onBlur={() => reset()} // Fetch when focus lost
                     sx={{ minWidth: 250 }}
                 />
 

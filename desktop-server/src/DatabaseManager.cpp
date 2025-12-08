@@ -10,7 +10,6 @@
 #include <set>
 #include <sstream>
 
-
 namespace fs = std::filesystem;
 
 DatabaseManager::DatabaseManager() : db_(nullptr) {}
@@ -142,6 +141,24 @@ bool DatabaseManager::createSchema() {
   if (!executeSQL(createMetadataTable))
     return false;
 
+  const char *createAuditLogsTable = R"(
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            action TEXT NOT NULL,
+            target_type TEXT,
+            target_id TEXT,
+            details TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ip_address TEXT,
+            FOREIGN KEY(user_id) REFERENCES admin_users(id)
+        );
+    )";
+
+  const char *createAuditLogsTimestampIndex = R"(
+        CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
+    )";
+
   const char *createPairingTokensTable = R"(
         CREATE TABLE IF NOT EXISTS pairing_tokens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,6 +174,11 @@ bool DatabaseManager::createSchema() {
   if (!executeSQL(createMetadataHashIndex))
     return false;
   if (!executeSQL(createMetadataClientIndex))
+    return false;
+
+  if (!executeSQL(createAuditLogsTable))
+    return false;
+  if (!executeSQL(createAuditLogsTimestampIndex))
     return false;
 
   if (!executeSQL(createAdminUsersTable))
@@ -459,6 +481,41 @@ int DatabaseManager::getPhotoCount(int clientId) {
 
   sqlite3_finalize(stmt);
   return count;
+}
+
+std::vector<std::string>
+DatabaseManager::batchCheckHashes(const std::vector<std::string> &hashes) {
+  std::vector<std::string> foundHashes;
+  if (hashes.empty()) {
+    return foundHashes;
+  }
+
+  // Build query: SELECT hash FROM metadata WHERE hash IN (?, ?, ?)
+  std::string sql = "SELECT hash FROM metadata WHERE hash IN (";
+  for (size_t i = 0; i < hashes.size(); ++i) {
+    sql += (i == 0 ? "?" : ", ?");
+  }
+  sql += ")";
+
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+    LOG_ERROR("Failed to prepare batchCheckHashes: " +
+              std::string(sqlite3_errmsg(db_)));
+    return foundHashes;
+  }
+
+  for (size_t i = 0; i < hashes.size(); ++i) {
+    sqlite3_bind_text(stmt, static_cast<int>(i + 1), hashes[i].c_str(), -1,
+                      SQLITE_TRANSIENT);
+  }
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    foundHashes.push_back(
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0)));
+  }
+
+  sqlite3_finalize(stmt);
+  return foundHashes;
 }
 
 // API Statistics Methods
@@ -933,10 +990,9 @@ int DatabaseManager::cleanupExpiredResetTokens() {
 
 // Media grid operations
 
-std::vector<PhotoMetadata>
-DatabaseManager::getPhotosWithPagination(int offset, int limit, int clientId,
-                                         const std::string &startDate,
-                                         const std::string &endDate) {
+std::vector<PhotoMetadata> DatabaseManager::getPhotosWithPagination(
+    int offset, int limit, int clientId, const std::string &startDate,
+    const std::string &endDate, const std::string &searchQuery) {
 
   std::vector<PhotoMetadata> photos;
 
@@ -959,6 +1015,10 @@ DatabaseManager::getPhotosWithPagination(int offset, int limit, int clientId,
     sql += " AND received_at <= '" + endDate + "'";
   }
 
+  if (!searchQuery.empty()) {
+    sql += " AND filename LIKE ?";
+  }
+
   sql += " ORDER BY id DESC LIMIT " + std::to_string(limit) + " OFFSET " +
          std::to_string(offset);
 
@@ -967,6 +1027,11 @@ DatabaseManager::getPhotosWithPagination(int offset, int limit, int clientId,
     LOG_ERROR("Failed to prepare getPhotosWithPagination statement: " +
               std::string(sqlite3_errmsg(db_)));
     return photos;
+  }
+
+  if (!searchQuery.empty()) {
+    std::string likeQuery = "%" + searchQuery + "%";
+    sqlite3_bind_text(stmt, 1, likeQuery.c_str(), -1, SQLITE_TRANSIENT);
   }
 
   while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -1007,7 +1072,8 @@ DatabaseManager::getPhotosWithPagination(int offset, int limit, int clientId,
 
 int DatabaseManager::getFilteredPhotoCount(int clientId,
                                            const std::string &startDate,
-                                           const std::string &endDate) {
+                                           const std::string &endDate,
+                                           const std::string &searchQuery) {
   std::string sql = "SELECT COUNT(*) FROM metadata WHERE 1=1";
 
   if (clientId >= 0) {
@@ -1022,11 +1088,20 @@ int DatabaseManager::getFilteredPhotoCount(int clientId,
     sql += " AND received_at <= '" + endDate + "'";
   }
 
+  if (!searchQuery.empty()) {
+    sql += " AND filename LIKE ?";
+  }
+
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
     LOG_ERROR("Failed to prepare getFilteredPhotoCount statement: " +
               std::string(sqlite3_errmsg(db_)));
     return 0;
+  }
+
+  if (!searchQuery.empty()) {
+    std::string likeQuery = "%" + searchQuery + "%";
+    sqlite3_bind_text(stmt, 1, likeQuery.c_str(), -1, SQLITE_TRANSIENT);
   }
 
   int count = 0;
@@ -1552,18 +1627,14 @@ bool DatabaseManager::validatePairingToken(const std::string &token) {
 
 bool DatabaseManager::markPairingTokenUsed(const std::string &token) {
   const char *sql = "UPDATE pairing_tokens SET is_used = 1 WHERE token = ?;";
-  return executeSQL(sql); // This is lazy, strictly should bind param.
-                          // Let's do it properly
-                          /*
-                          sqlite3_stmt *stmt;
-                          if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-                              sqlite3_bind_text(stmt, 1, token.c_str(), -1, SQLITE_STATIC);
-                              bool success = (sqlite3_step(stmt) == SQLITE_DONE);
-                              sqlite3_finalize(stmt);
-                              return success;
-                          }
-                          return false;
-                          */
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+    sqlite3_bind_text(stmt, 1, token.c_str(), -1, SQLITE_STATIC);
+    bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    return success;
+  }
+  return false;
 }
 
 int DatabaseManager::cleanupExpiredPairingTokens() {
@@ -1577,5 +1648,105 @@ int DatabaseManager::cleanupExpiredPairingTokens() {
     }
     sqlite3_finalize(stmt);
   }
+  return count;
+}
+
+// Audit Log Implementation
+
+bool DatabaseManager::logActivity(int userId, const std::string &action,
+                                  const std::string &targetType,
+                                  const std::string &targetId,
+                                  const std::string &details,
+                                  const std::string &ipAddress) {
+  const char *sql = "INSERT INTO audit_logs (user_id, action, target_type, "
+                    "target_id, details, ip_address) VALUES (?, ?, ?, ?, ?, ?)";
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    LOG_ERROR("Failed to prepare logActivity: " +
+              std::string(sqlite3_errmsg(db_)));
+    return false;
+  }
+
+  sqlite3_bind_int(stmt, 1, userId);
+  sqlite3_bind_text(stmt, 2, action.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 3, targetType.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 4, targetId.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 5, details.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 6, ipAddress.c_str(), -1, SQLITE_TRANSIENT);
+
+  bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+  sqlite3_finalize(stmt);
+  return success;
+}
+
+std::vector<DatabaseManager::AuditLogEntry>
+DatabaseManager::getAuditLogs(int limit, int offset) {
+  std::vector<AuditLogEntry> logs;
+  // Join with admin_users to get username
+  const char *sql =
+      "SELECT a.id, a.user_id, u.username, a.action, a.target_type, "
+      "a.target_id, a.details, a.timestamp, a.ip_address "
+      "FROM audit_logs a "
+      "LEFT JOIN admin_users u ON a.user_id = u.id "
+      "ORDER BY a.timestamp DESC "
+      "LIMIT ? OFFSET ?";
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    LOG_ERROR("Failed to prepare getAuditLogs: " +
+              std::string(sqlite3_errmsg(db_)));
+    return logs;
+  }
+
+  sqlite3_bind_int(stmt, 1, limit);
+  sqlite3_bind_int(stmt, 2, offset);
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    AuditLogEntry log;
+    log.id = sqlite3_column_int(stmt, 0);
+    log.userId = sqlite3_column_int(stmt, 1);
+    const char *user =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
+    log.username = user ? user : "Unknown";
+    log.action = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3));
+
+    const char *tType =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
+    log.targetType = tType ? tType : "";
+
+    const char *tId =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 5));
+    log.targetId = tId ? tId : "";
+
+    const char *dets =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 6));
+    log.details = dets ? dets : "";
+
+    log.timestamp =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 7));
+
+    const char *ip =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 8));
+    log.ipAddress = ip ? ip : "";
+
+    logs.push_back(log);
+  }
+  sqlite3_finalize(stmt);
+  return logs;
+}
+
+int DatabaseManager::getAuditLogCount() {
+  const char *sql = "SELECT COUNT(*) FROM audit_logs";
+  sqlite3_stmt *stmt;
+
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    return 0;
+  }
+
+  int count = 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    count = sqlite3_column_int(stmt, 0);
+  }
+
+  sqlite3_finalize(stmt);
   return count;
 }

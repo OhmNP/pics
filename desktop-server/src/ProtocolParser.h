@@ -10,6 +10,7 @@ enum class CommandType {
   PHOTO_METADATA,
   DATA_TRANSFER, // NEW
   RESUME_UPLOAD, // NEW
+  BATCH_CHECK,   // NEW for Reconciliation
   BATCH_END,
   SESSION_END,
   UNKNOWN
@@ -22,6 +23,7 @@ struct ParsedCommand {
   PhotoMetadata photo; // For PHOTO_METADATA
   long long dataSize;  // For DATA_TRANSFER
   std::string hash;    // For RESUME_UPLOAD
+  int batchCheckCount; // For BATCH_CHECK
 };
 
 class ProtocolParser {
@@ -34,6 +36,7 @@ public:
   static std::string createSessionAck(int sessionId);
   static std::string createSendResponse(long long offset = 0); // NEW
   static std::string createSkipResponse();                     // NEW
+  static std::string createBatchResultResponse(int count);     // NEW
   static std::string createError(const std::string &message);
 
 private:

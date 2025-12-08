@@ -106,5 +106,5 @@ export const api = {
     getConfig: () => axios.get<ServerConfig>(`${API_BASE}/config`),
     updateConfig: (config: Partial<ServerConfig>) => axios.post(`${API_BASE}/config`, config),
     // Media grid
-    getMedia: (offset = 0, limit = 50, clientId = 0, startDate = '', endDate = '') => axios.get(`${API_BASE}/media`, { params: { offset, limit, clientId, startDate, endDate } }),
+    getMedia: (offset = 0, limit = 50, clientId = 0, startDate = '', endDate = '', search = '') => axios.get(`${API_BASE}/media`, { params: { offset, limit, clientId, startDate, endDate, search } }),
 };

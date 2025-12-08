@@ -13,8 +13,9 @@ enum class SessionState {
   AWAITING_HELLO,
   AWAITING_BATCH_START,
   AWAITING_PHOTO_METADATA,
-  AWAITING_DATA_COMMAND, // NEW
-  RECEIVING_PHOTO_DATA,  // NEW
+  AWAITING_DATA_COMMAND,       // NEW
+  RECEIVING_PHOTO_DATA,        // NEW
+  AWAITING_BATCH_CHECK_HASHES, // NEW
   AWAITING_BATCH_END,
   AWAITING_SESSION_END
 };
@@ -45,6 +46,11 @@ private:
 
   PhotoMetadata currentPhoto_;  // NEW
   std::string currentTempPath_; // NEW
+
+  // Batch Check Reconciliation
+  int batchCheckCount_;
+  int batchCheckReceived_;
+  std::vector<std::string> currentBatchHashes_;
 };
 
 class TcpListener {

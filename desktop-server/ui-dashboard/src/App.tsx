@@ -10,6 +10,7 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import DnsIcon from '@mui/icons-material/Dns';
 import ErrorIcon from '@mui/icons-material/Error';
 import StorageIcon from '@mui/icons-material/Storage';
+import HistoryIcon from '@mui/icons-material/History';
 import Dashboard from './components/Dashboard';
 import Photos from './components/Photos';
 import Clients from './components/Clients';
@@ -21,6 +22,7 @@ import Settings from './components/Settings';
 import Login from './components/Login';
 import ServerHealth from './components/ServerHealth';
 import StorageOverview from './components/StorageOverview';
+import AuditLogs from './components/AuditLogs';
 import ErrorFeed from './components/ErrorFeed';
 import ProtectedRoute from './components/ProtectedRoute';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -48,6 +50,7 @@ const navItems: NavItem[] = [
     { text: 'Sessions', icon: <SyncIcon />, path: '/sessions' },
     { text: 'Health', icon: <DnsIcon />, path: '/health' },
     { text: 'Storage', icon: <StorageIcon />, path: '/storage' },
+    { text: 'Audit', icon: <HistoryIcon />, path: '/audit' },
     { text: 'Logs', icon: <ErrorIcon />, path: '/logs' }, // ErrorIcon needs import
     { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
 ];
@@ -188,6 +191,7 @@ function AppContent() {
                         <Route path="/sessions" element={<Sessions />} />
                         <Route path="/health" element={<ServerHealth />} />
                         <Route path="/storage" element={<StorageOverview />} />
+                        <Route path="/audit" element={<AuditLogs />} />
                         <Route path="/logs" element={<ErrorFeed />} />
                         <Route path="/settings" element={<Settings />} />
                     </Routes>

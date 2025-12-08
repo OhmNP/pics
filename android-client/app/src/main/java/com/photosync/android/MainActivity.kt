@@ -14,13 +14,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
-import com.photosync.android.data.SettingsManager
-import com.photosync.android.service.ConnectionService
 import com.photosync.android.ui.navigation.PhotoSyncNavigation
 import com.photosync.android.ui.theme.PicsTheme
 
 class MainActivity : ComponentActivity() {
-    private lateinit var settings: SettingsManager
     
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -34,12 +31,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        settings = SettingsManager(this)
-        
-        // Auto-start connection service if settings are configured
-        if (settings.serverIp.isNotBlank()) {
-            startConnectionService()
-        }
         
         setContent {
             PicsTheme {
@@ -50,15 +41,6 @@ class MainActivity : ComponentActivity() {
                     PhotoSyncNavigation()
                 }
             }
-        }
-    }
-    
-    private fun startConnectionService() {
-        val intent = Intent(this, ConnectionService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
         }
     }
 }

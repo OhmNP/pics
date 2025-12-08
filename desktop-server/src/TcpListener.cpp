@@ -39,7 +39,31 @@ void Session::doRead() {
           }
 
           if (!message.empty()) {
-            handleCommand(message);
+            if (state_ == SessionState::AWAITING_BATCH_CHECK_HASHES) {
+              // Collect hash
+              currentBatchHashes_.push_back(message);
+              batchCheckReceived_++;
+
+              if (batchCheckReceived_ >= batchCheckCount_) {
+                // All hashes received, perform check
+                std::vector<std::string> foundHashes =
+                    db_.batchCheckHashes(currentBatchHashes_);
+                doWrite(ProtocolParser::createBatchResultResponse(
+                    foundHashes.size()));
+
+                // Send found hashes
+                for (const auto &hash : foundHashes) {
+                  doWrite(hash + "\n");
+                }
+
+                // Reset state
+                state_ = SessionState::AWAITING_BATCH_START;
+                LOG_INFO("Batch check completed. Found " +
+                         std::to_string(foundHashes.size()) + " matches.");
+              }
+            } else {
+              handleCommand(message);
+            }
           }
 
           if (state_ != SessionState::RECEIVING_PHOTO_DATA) {
@@ -203,6 +227,24 @@ void Session::handleCommand(const std::string &message) {
     ConnectionManager::getInstance().updateStatus(sessionId_, "syncing");
 
     LOG_INFO("Session started: " + std::to_string(sessionId_));
+    break;
+    LOG_INFO("Session started: " + std::to_string(sessionId_));
+    break;
+  }
+
+  case CommandType::BATCH_CHECK: { // NEW
+    if (state_ != SessionState::AWAITING_BATCH_START) {
+      doWrite(ProtocolParser::createError("Invalid state"));
+      return;
+    }
+
+    batchCheckCount_ = cmd.batchCheckCount;
+    batchCheckReceived_ = 0;
+    currentBatchHashes_.clear();
+    state_ = SessionState::AWAITING_BATCH_CHECK_HASHES;
+    LOG_INFO("Batch check started: " + std::to_string(batchCheckCount_) +
+             " hashes");
+    // No ACK here, just wait for lines of hashes
     break;
   }
 

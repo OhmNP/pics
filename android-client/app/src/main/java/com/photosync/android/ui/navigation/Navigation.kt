@@ -45,9 +45,6 @@ fun PhotoSyncNavigation() {
                 HomeScreen(
                     onNavigateToGallery = {
                         navController.navigate(Screen.Gallery.route)
-                    },
-                    onNavigateToSync = {
-                        navController.navigate(Screen.Sync.route)
                     }
                 )
             }

@@ -52,8 +52,8 @@ private:
   std::string handleGetLogs();
 
   // Authentication endpoint handlers
-  std::string handlePostLogin(const std::string &requestBody);
-  std::string handlePostLogout(const std::string &authHeader);
+  std::string handlePostLogin(const crow::request &req);
+  std::string handlePostLogout(const crow::request &req);
   std::string handleGetValidate(const std::string &authHeader);
 
   // Authentication middleware
@@ -62,9 +62,11 @@ private:
   // Media grid endpoints
   std::string handleGetMedia(int offset, int limit, int clientId,
                              const std::string &startDate,
-                             const std::string &endDate);
+                             const std::string &endDate,
+                             const std::string &searchQuery = "");
   void handleGetThumbnail(crow::response &res, int photoId);
   void handleGetMediaDownload(crow::response &res, int photoId);
-  std::string handlePostGenerateToken();
-  std::string handlePostRegenerateThumbnails(const std::string &requestBody);
+  std::string handlePostGenerateToken(const crow::request &req);
+  std::string handlePostRegenerateThumbnails(const crow::request &req);
+  std::string handleGetAuditLogs(int page, int limit);
 };

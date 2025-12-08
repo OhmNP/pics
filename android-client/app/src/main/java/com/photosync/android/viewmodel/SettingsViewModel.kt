@@ -8,16 +8,20 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.photosync.android.data.AppDatabase
 import com.photosync.android.data.SettingsManager
-import com.photosync.android.service.ConnectionService
+import com.photosync.android.repository.MediaRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
     private val settings = SettingsManager(application)
     private val context = application
+    private val database = AppDatabase.getDatabase(application)
+    private val mediaRepository = MediaRepository(application.contentResolver, database)
     
     private val _serverIp = MutableStateFlow(settings.serverIp)
     val serverIp: StateFlow<String> = _serverIp.asStateFlow()
@@ -43,13 +47,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         settings.serverPort = port
         
         // Restart connection service with new settings
-        restartConnectionService()
+        restartSyncService()
         
         return true
     }
     
-    private fun restartConnectionService() {
-        val intent = Intent(context, ConnectionService::class.java)
+    private fun restartSyncService() {
+        val intent = Intent(context, com.photosync.android.service.EnhancedSyncService::class.java).apply {
+            action = com.photosync.android.service.EnhancedSyncService.ACTION_START_SYNC
+        }
         context.stopService(intent)
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -69,8 +75,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
     
     fun resetSyncHistory() {
-        com.photosync.android.repository.SyncRepository.getInstance(getApplication()).resetSync()
-        refreshDebugInfo()
+        viewModelScope.launch {
+            database.syncStatusDao().clearAll()
+            refreshDebugInfo()
+        }
     }
     
     // Debug Info
@@ -89,17 +97,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     
     fun refreshDebugInfo() {
         viewModelScope.launch {
-            val context = getApplication<Application>()
-            val db = com.photosync.android.data.LocalDB(context)
-            val syncRepo = com.photosync.android.repository.SyncRepository.getInstance(context)
-            val photoRepo = com.photosync.android.repository.PhotoRepository.getInstance(context)
+            val syncedCount = mediaRepository.getSyncedCount().first()
+            val pendingCount = mediaRepository.getPendingCount().first()
             
-            _lastSyncTime.value = syncRepo.getLastSyncTime()
-            _totalPhotos.value = photoRepo.getPhotoCount()
+            _totalPhotos.value = syncedCount + pendingCount
+            _pendingPhotos.value = pendingCount
             
-            // Calculate pending
-            val scanner = com.photosync.android.data.MediaScanner(context, db)
-            _pendingPhotos.value = scanner.getPendingCount()
+            // Get last sync time from server config
+            val serverConfig = database.serverConfigDao().getServerConfig()
+            _lastSyncTime.value = serverConfig?.lastConnected ?: 0L
         }
     }
 }

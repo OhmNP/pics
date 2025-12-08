@@ -161,6 +161,23 @@ Custom line-based text protocol. Commands are newline-terminated. Binary data is
 *   **Payload**: Immediately followed by `<size_bytes>` of binary data.
 *   **Response**: `ACK` (after successful receipt and verification)
 
+#### `BATCH_CHECK <count>`
+*   **Direction**: Client -> Server
+*   **Purpose**: Efficiently check which files (by hash) already exist on the server.
+*   **Payload**: `<count>` lines, each containing a SHA-256 hash.
+*   **Response**: 
+    *   `BATCH_RESULT <found_count>` followed by `<found_count>` lines of hashes that exist on the server.
+*   **Example**:
+    ```
+    C: BATCH_CHECK 3
+    C: abc123...
+    C: def456...
+    C: ghi789...
+    S: BATCH_RESULT 2
+    S: abc123...
+    S: ghi789...
+    ```
+
 #### `BATCH_END`
 *   **Direction**: Client -> Server
 *   **Response**: `ACK`

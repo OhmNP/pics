@@ -2,52 +2,16 @@ package com.photosync.android.viewmodel
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
-import com.photosync.android.data.PhotoMeta
-import com.photosync.android.repository.PhotoRepository
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
-
-data class GalleryUiState(
-    val photos: List<PhotoMeta> = emptyList(),
-    val isLoading: Boolean = false,
-    val error: String? = null,
-    val totalCount: Int = 0
-)
+import androidx.paging.PagingData
+import com.photosync.android.data.AppDatabase
+import com.photosync.android.model.MediaItem
+import com.photosync.android.repository.MediaRepository
+import kotlinx.coroutines.flow.Flow
 
 class GalleryViewModel(application: Application) : AndroidViewModel(application) {
-    private val photoRepo = PhotoRepository.getInstance(application)
     
-    private val _uiState = MutableStateFlow(GalleryUiState())
-    val uiState: StateFlow<GalleryUiState> = _uiState.asStateFlow()
+    private val database = AppDatabase.getDatabase(application)
+    private val mediaRepository = MediaRepository(application.contentResolver, database)
     
-    init {
-        loadPhotos()
-    }
-    
-    fun loadPhotos(offset: Int = 0, limit: Int = 100) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
-            try {
-                val photos = photoRepo.getAllPhotos(limit, offset)
-                val totalCount = photoRepo.getPhotoCount()
-                _uiState.value = GalleryUiState(
-                    photos = photos,
-                    isLoading = false,
-                    totalCount = totalCount
-                )
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    error = e.message ?: "Failed to load photos"
-                )
-            }
-        }
-    }
-    
-    fun refresh() {
-        loadPhotos()
-    }
+    val pagedMedia: Flow<PagingData<MediaItem>> = mediaRepository.getPagedMediaWithStatus()
 }

@@ -12,8 +12,15 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 std::string
-ApiServer::handlePostRegenerateThumbnails(const std::string &requestBody) {
+ApiServer::handlePostRegenerateThumbnails(const crow::request &req) {
   try {
+    std::string requestBody = req.body;
+    std::string ipAddress = req.remote_ip_address;
+    std::string authHeader = req.get_header_value("Authorization");
+    std::string token = (authHeader.length() > 7) ? authHeader.substr(7) : "";
+    AuthSession session = db_.getSessionByToken(token);
+    int userId = session.userId;
+
     LOG_INFO("Regenerate thumbnails request: " + requestBody);
     auto requestData = json::parse(requestBody);
 
@@ -35,6 +42,12 @@ ApiServer::handlePostRegenerateThumbnails(const std::string &requestBody) {
 
         // Always return success even if directory didn't match, as state is
         // "cleared"
+        // Always return success even if directory didn't match, as state is
+        // "cleared"
+        if (userId != -1) {
+          db_.logActivity(userId, "REGENERATE_THUMBNAILS", "SYSTEM", "ALL",
+                          "Cleared all thumbnails", ipAddress);
+        }
         return json({{"success", true},
                      {"message", "All thumbnails cleared. They will be "
                                  "regenerated on demand."}})
@@ -57,6 +70,11 @@ ApiServer::handlePostRegenerateThumbnails(const std::string &requestBody) {
       PhotoMetadata photo = db_.getPhotoById(photoId);
       if (photo.id != -1) {
         if (ThumbnailGenerator::generateThumbnail(photo.originalPath, path)) {
+          if (userId != -1) {
+            db_.logActivity(userId, "REGENERATE_THUMBNAILS", "PHOTO",
+                            std::to_string(photoId), "Regenerated thumbnail",
+                            ipAddress);
+          }
           return json({{"success", true}, {"message", "Thumbnail regenerated"}})
               .dump();
         } else {

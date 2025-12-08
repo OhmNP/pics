@@ -200,6 +200,28 @@ void ApiServer::setupRoutes() {
         return res;
       });
 
+  // GET /api/audit - Audit logs
+  CROW_ROUTE((*g_app), "/api/audit")
+      .methods("GET"_method)([this](const crow::request &req) {
+        std::string authHeader = req.get_header_value("Authorization");
+        int userId = -1;
+        if (!validateSession(authHeader, userId)) {
+          return crow::response(401);
+        }
+
+        int page = req.url_params.get("page")
+                       ? std::stoi(req.url_params.get("page"))
+                       : 1;
+        int limit = req.url_params.get("limit")
+                        ? std::stoi(req.url_params.get("limit"))
+                        : 50;
+
+        auto res = crow::response(handleGetAuditLogs(page, limit));
+        res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Content-Type", "application/json");
+        return res;
+      });
+
   // GET /api/health - Server health metrics
   CROW_ROUTE((*g_app), "/api/health").methods("GET"_method)([this]() {
     auto res = crow::response(handleGetHealth());
@@ -212,7 +234,7 @@ void ApiServer::setupRoutes() {
   // POST /api/auth/login - User login
   CROW_ROUTE((*g_app), "/api/auth/login")
       .methods("POST"_method)([this](const crow::request &req) {
-        auto res = crow::response(handlePostLogin(req.body));
+        auto res = crow::response(handlePostLogin(req));
         res.add_header("Access-Control-Allow-Origin", "*");
         res.add_header("Content-Type", "application/json");
         return res;
@@ -228,7 +250,7 @@ void ApiServer::setupRoutes() {
           return crow::response(401);
         }
 
-        auto res = crow::response(handlePostGenerateToken());
+        auto res = crow::response(handlePostGenerateToken(req));
         res.add_header("Access-Control-Allow-Origin", "*");
         res.add_header("Content-Type", "application/json");
         return res;
@@ -244,7 +266,7 @@ void ApiServer::setupRoutes() {
           return crow::response(401);
         }
 
-        auto res = crow::response(handlePostRegenerateThumbnails(req.body));
+        auto res = crow::response(handlePostRegenerateThumbnails(req));
         res.add_header("Access-Control-Allow-Origin", "*");
         res.add_header("Content-Type", "application/json");
         return res;
@@ -253,8 +275,7 @@ void ApiServer::setupRoutes() {
   // POST /api/auth/logout - User logout
   CROW_ROUTE((*g_app), "/api/auth/logout")
       .methods("POST"_method)([this](const crow::request &req) {
-        std::string authHeader = req.get_header_value("Authorization");
-        auto res = crow::response(handlePostLogout(authHeader));
+        auto res = crow::response(handlePostLogout(req));
         res.add_header("Access-Control-Allow-Origin", "*");
         res.add_header("Content-Type", "application/json");
         return res;
@@ -289,9 +310,11 @@ void ApiServer::setupRoutes() {
         std::string endDate = req.url_params.get("end_date")
                                   ? req.url_params.get("end_date")
                                   : "";
+        std::string search =
+            req.url_params.get("search") ? req.url_params.get("search") : "";
 
-        auto res = crow::response(
-            handleGetMedia(offset, limit, clientId, startDate, endDate));
+        auto res = crow::response(handleGetMedia(offset, limit, clientId,
+                                                 startDate, endDate, search));
         res.add_header("Access-Control-Allow-Origin", "*");
         res.add_header("Content-Type", "application/json");
         return res;
@@ -606,9 +629,10 @@ std::string ApiServer::handlePostConfig(const std::string &requestBody) {
 // Authentication endpoint implementations
 
 // POST /api/auth/login - User login
-std::string ApiServer::handlePostLogin(const std::string &requestBody) {
+std::string ApiServer::handlePostLogin(const crow::request &req) {
   try {
-    auto requestData = json::parse(requestBody);
+    auto requestData = json::parse(req.body);
+    std::string ipAddress = req.remote_ip_address;
 
     // Validate request
     if (!requestData.contains("username") ||
@@ -724,8 +748,10 @@ std::string ApiServer::handlePostLogin(const std::string &requestBody) {
 }
 
 // POST /api/auth/logout - User logout
-std::string ApiServer::handlePostLogout(const std::string &authHeader) {
+std::string ApiServer::handlePostLogout(const crow::request &req) {
   try {
+    std::string authHeader = req.get_header_value("Authorization");
+    std::string ipAddress = req.remote_ip_address;
     // Extract token from Authorization header
     if (authHeader.empty() || authHeader.substr(0, 7) != "Bearer ") {
       json error = {{"error", "Missing or invalid authorization header"}};
@@ -733,6 +759,10 @@ std::string ApiServer::handlePostLogout(const std::string &authHeader) {
     }
 
     std::string token = authHeader.substr(7);
+
+    // Get user ID before deleting session for logging
+    AuthSession session = db_.getSessionByToken(token);
+    int userId = session.userId;
 
     // Delete session from database
     bool deleted = db_.deleteSession(token);
@@ -744,6 +774,11 @@ std::string ApiServer::handlePostLogout(const std::string &authHeader) {
     }
 
     LOG_INFO("User logged out");
+
+    if (userId != -1) {
+      db_.logActivity(userId, "LOGOUT", "SESSION", token, "User logged out",
+                      ipAddress);
+    }
 
     json response = {{"success", true}};
     return response.dump();
@@ -835,7 +870,8 @@ bool ApiServer::validateSession(const std::string &authHeader, int &userId) {
 // GET /api/media - List photos with pagination and filters
 std::string ApiServer::handleGetMedia(int offset, int limit, int clientId,
                                       const std::string &startDate,
-                                      const std::string &endDate) {
+                                      const std::string &endDate,
+                                      const std::string &searchQuery) {
   try {
     // Validate and cap limit
     if (limit <= 0)
@@ -847,10 +883,11 @@ std::string ApiServer::handleGetMedia(int offset, int limit, int clientId,
 
     // Get photos with pagination
     auto photos = db_.getPhotosWithPagination(offset, limit, clientId,
-                                              startDate, endDate);
+                                              startDate, endDate, searchQuery);
 
     // Get total count for pagination
-    int total = db_.getFilteredPhotoCount(clientId, startDate, endDate);
+    int total =
+        db_.getFilteredPhotoCount(clientId, startDate, endDate, searchQuery);
 
     // Build response
     json items = json::array();
@@ -1106,16 +1143,27 @@ std::string ApiServer::handleGetClientDetails(int clientId) {
   }
 }
 
-std::string ApiServer::handlePostGenerateToken() {
+std::string ApiServer::handlePostGenerateToken(const crow::request &req) {
   try {
-    std::string token = db_.generatePairingToken();
-    if (token.empty()) {
+    std::string ipAddress = req.remote_ip_address;
+    std::string authHeader = req.get_header_value("Authorization");
+    std::string token = (authHeader.length() > 7) ? authHeader.substr(7) : "";
+    AuthSession session = db_.getSessionByToken(token);
+    int userId = session.userId;
+
+    std::string pairingToken = db_.generatePairingToken();
+    if (pairingToken.empty()) {
       json error = {{"error", "Failed to generate token"}};
       return error.dump();
     }
 
+    if (userId != -1) {
+      db_.logActivity(userId, "GENERATE_TOKEN", "PAIRING_TOKEN", pairingToken,
+                      "Generated pairing token", ipAddress);
+    }
+
     json response = {
-        {"token", token},
+        {"token", pairingToken},
         {"expiresIn", 15 * 60},              // 15 minutes
         {"expiresAt", "15 minutes from now"} // Simplification
     };
@@ -1123,6 +1171,48 @@ std::string ApiServer::handlePostGenerateToken() {
     return response.dump();
   } catch (const std::exception &e) {
     LOG_ERROR("Error in handlePostGenerateToken: " + std::string(e.what()));
+    json error = {{"error", e.what()}};
+    return error.dump();
+  }
+}
+
+std::string ApiServer::handleGetAuditLogs(int page, int limit) {
+  try {
+    if (page < 1)
+      page = 1;
+    if (limit <= 0)
+      limit = 50;
+    int offset = (page - 1) * limit;
+
+    auto logs = db_.getAuditLogs(limit, offset);
+    json items = json::array();
+
+    for (const auto &log : logs) {
+      items.push_back({{"id", log.id},
+                       {"userId", log.userId},
+                       {"username", log.username},
+                       {"action", log.action},
+                       {"targetType", log.targetType},
+                       {"targetId", log.targetId},
+                       {"details", log.details},
+                       {"timestamp", log.timestamp},
+                       {"ipAddress", log.ipAddress}});
+    }
+
+    int total = db_.getAuditLogCount();
+
+    json result = {
+        {"items", items},
+        {"pagination",
+         {{"page", page},
+          {"limit", limit},
+          {"total", total},
+          {"pages", (limit > 0) ? (total + limit - 1) / limit : 0}}}};
+
+    return result.dump();
+
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error in handleGetAuditLogs: " + std::string(e.what()));
     json error = {{"error", e.what()}};
     return error.dump();
   }
