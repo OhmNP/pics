@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Box, Typography, Card, CardContent, Chip, LinearProgress, Grid, Divider } from '@mui/material';
+import { Box, Typography, Card, CardContent, Chip, LinearProgress, Grid, Divider, Button } from '@mui/material';
 import { api } from '../services/api';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
+import AddIcon from '@mui/icons-material/Add';
+import { useNavigate } from 'react-router-dom';
+import Pairing from './Pairing';
 
 interface Client {
     id: number;
@@ -38,9 +41,11 @@ function formatTimeAgo(dateString: string): string {
 }
 
 export default function Clients() {
+    const navigate = useNavigate();
     const [connectedClients, setConnectedClients] = useState<Client[]>([]);
     const [allClients, setAllClients] = useState<Client[]>([]);
     const [loading, setLoading] = useState(true);
+    const [pairingOpen, setPairingOpen] = useState(false);
 
     useEffect(() => {
         const fetchClients = async () => {
@@ -66,7 +71,7 @@ export default function Clients() {
     }, []);
 
     const ClientCard = ({ client }: { client: Client }) => (
-        <Card sx={{ mb: 2 }}>
+        <Card sx={{ mb: 2, cursor: 'pointer' }} onClick={() => navigate(`/clients/${client.id}`)}>
             <CardContent>
                 <Box display="flex" alignItems="flex-start" justifyContent="space-between">
                     <Box display="flex" gap={2} flex={1}>
@@ -142,9 +147,18 @@ export default function Clients() {
 
     return (
         <Box p={3}>
-            <Typography variant="h4" fontWeight="bold" gutterBottom>
-                Clients
-            </Typography>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
+                <Typography variant="h4" fontWeight="bold">
+                    Clients
+                </Typography>
+                <Button
+                    variant="contained"
+                    startIcon={<AddIcon />}
+                    onClick={() => setPairingOpen(true)}
+                >
+                    Pair Device
+                </Button>
+            </Box>
 
             {/* Connected Clients */}
             <Box mb={4}>
@@ -171,6 +185,8 @@ export default function Clients() {
                     ))}
                 </Grid>
             </Box>
+
+            <Pairing open={pairingOpen} onClose={() => setPairingOpen(false)} />
         </Box>
     );
 }

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Box, Typography, Card, CardContent, TextField, Button, Grid, Divider, Alert } from '@mui/material';
 import { api, ServerConfig } from '../services/api';
 import SaveIcon from '@mui/icons-material/Save';
+import { ThumbnailRegenerator } from './ThumbnailRegenerator';
 
 export default function Settings() {
     const [config, setConfig] = useState<ServerConfig | null>(null);
@@ -206,6 +207,11 @@ export default function Settings() {
                             </Grid>
                         </CardContent>
                     </Card>
+                </Grid>
+
+                {/* Maintenance Tools */}
+                <Grid item xs={12}>
+                    <ThumbnailRegenerator />
                 </Grid>
             </Grid>
 

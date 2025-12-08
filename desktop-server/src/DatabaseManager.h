@@ -6,7 +6,6 @@
 #include <string>
 #include <vector>
 
-
 struct PhotoMetadata {
   int id = -1;
   std::string filename;
@@ -48,6 +47,14 @@ struct AuthSession {
   std::string ipAddress;
 };
 
+struct PairingToken {
+  int id;
+  std::string token;
+  std::string createdAt;
+  std::string expiresAt;
+  bool isUsed;
+};
+
 class DatabaseManager {
 public:
   DatabaseManager();
@@ -69,6 +76,7 @@ public:
     long long storageUsed;
   };
   std::vector<ClientRecord> getClients();
+  ClientRecord getClientDetails(int clientId);
 
   struct StorageStats {
     long long totalStorageUsed;
@@ -135,6 +143,12 @@ public:
   bool resetPassword(const std::string &token,
                      const std::string &newPasswordHash);
   int cleanupExpiredResetTokens();
+
+  // Pairing Token operations
+  std::string generatePairingToken();
+  bool validatePairingToken(const std::string &token);
+  bool markPairingTokenUsed(const std::string &token);
+  int cleanupExpiredPairingTokens();
 
   struct LogEntry {
     int id;

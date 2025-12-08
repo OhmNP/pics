@@ -144,6 +144,15 @@ void ApiServer::setupRoutes() {
     return res;
   });
 
+  // GET /api/clients/:id - Client details
+  CROW_ROUTE((*g_app), "/api/clients/<int>")
+      .methods("GET"_method)([this](int clientId) {
+        auto res = crow::response(handleGetClientDetails(clientId));
+        res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Content-Type", "application/json");
+        return res;
+      });
+
   // GET /api/sessions - Session history
   CROW_ROUTE((*g_app), "/api/sessions")
       .methods("GET"_method)([this](const crow::request &req) {
@@ -204,6 +213,38 @@ void ApiServer::setupRoutes() {
   CROW_ROUTE((*g_app), "/api/auth/login")
       .methods("POST"_method)([this](const crow::request &req) {
         auto res = crow::response(handlePostLogin(req.body));
+        res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Content-Type", "application/json");
+        return res;
+      });
+
+  // POST /api/tokens - Generate pairing token
+  CROW_ROUTE((*g_app), "/api/tokens")
+      .methods("POST"_method)([this](const crow::request &req) {
+        // Simple auth check similar to logout
+        std::string authHeader = req.get_header_value("Authorization");
+        int userId = -1;
+        if (!validateSession(authHeader, userId)) {
+          return crow::response(401);
+        }
+
+        auto res = crow::response(handlePostGenerateToken());
+        res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Content-Type", "application/json");
+        return res;
+      });
+
+  // POST /api/maintenance/thumbnails - Regenerate thumbnails
+  CROW_ROUTE((*g_app), "/api/maintenance/thumbnails")
+      .methods("POST"_method)([this](const crow::request &req) {
+        // Auth check
+        std::string authHeader = req.get_header_value("Authorization");
+        int userId = -1;
+        if (!validateSession(authHeader, userId)) {
+          return crow::response(401);
+        }
+
+        auto res = crow::response(handlePostRegenerateThumbnails(req.body));
         res.add_header("Access-Control-Allow-Origin", "*");
         res.add_header("Content-Type", "application/json");
         return res;
@@ -1033,6 +1074,55 @@ std::string ApiServer::handleGetLogs() {
     return response.dump();
   } catch (const std::exception &e) {
     LOG_ERROR("Error in handleGetLogs: " + std::string(e.what()));
+    json error = {{"error", e.what()}};
+    return error.dump();
+  }
+}
+
+std::string ApiServer::handleGetClientDetails(int clientId) {
+  try {
+    DatabaseManager::ClientRecord client = db_.getClientDetails(clientId);
+    if (client.id == -1) {
+      json error = {{"error", "Client not found"}};
+      return error.dump();
+    }
+
+    json response = {
+        {"id", client.id},
+        {"deviceId", client.deviceId},
+        {"lastSeen", client.lastSeen},
+        {"photoCount", client.photoCount},
+        {"storageUsed", client.storageUsed},
+        {"formattedStorage",
+         client.storageUsed} // formatBytes logic usually in frontend, but could
+                             // send number
+    };
+
+    return response.dump();
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error in handleGetClientDetails: " + std::string(e.what()));
+    json error = {{"error", e.what()}};
+    return error.dump();
+  }
+}
+
+std::string ApiServer::handlePostGenerateToken() {
+  try {
+    std::string token = db_.generatePairingToken();
+    if (token.empty()) {
+      json error = {{"error", "Failed to generate token"}};
+      return error.dump();
+    }
+
+    json response = {
+        {"token", token},
+        {"expiresIn", 15 * 60},              // 15 minutes
+        {"expiresAt", "15 minutes from now"} // Simplification
+    };
+
+    return response.dump();
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error in handlePostGenerateToken: " + std::string(e.what()));
     json error = {{"error", e.what()}};
     return error.dump();
   }

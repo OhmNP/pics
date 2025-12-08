@@ -39,6 +39,7 @@ private:
   std::string handleGetPhotos(int page, int limit, const std::string &clientId,
                               const std::string &search);
   std::string handleGetClients();
+  std::string handleGetClientDetails(int clientId);
   std::string handleGetSessions(int page, int limit,
                                 const std::string &clientId,
                                 const std::string &status);
@@ -64,4 +65,6 @@ private:
                              const std::string &endDate);
   void handleGetThumbnail(crow::response &res, int photoId);
   void handleGetMediaDownload(crow::response &res, int photoId);
+  std::string handlePostGenerateToken();
+  std::string handlePostRegenerateThumbnails(const std::string &requestBody);
 };

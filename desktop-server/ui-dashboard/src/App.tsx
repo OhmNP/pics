@@ -13,7 +13,10 @@ import StorageIcon from '@mui/icons-material/Storage';
 import Dashboard from './components/Dashboard';
 import Photos from './components/Photos';
 import Clients from './components/Clients';
+import ClientDetails from './components/ClientDetails';
 import Sessions from './components/Sessions';
+
+
 import Settings from './components/Settings';
 import Login from './components/Login';
 import ServerHealth from './components/ServerHealth';
@@ -181,6 +184,7 @@ function AppContent() {
                         <Route path="/" element={<Dashboard />} />
                         <Route path="/photos" element={<Photos />} />
                         <Route path="/clients" element={<Clients />} />
+                        <Route path="/clients/:id" element={<ClientDetails />} />
                         <Route path="/sessions" element={<Sessions />} />
                         <Route path="/health" element={<ServerHealth />} />
                         <Route path="/storage" element={<StorageOverview />} />
