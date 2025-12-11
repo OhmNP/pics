@@ -22,6 +22,9 @@ interface SyncStatusDao {
     
     @Query("SELECT COUNT(*) FROM sync_status WHERE syncStatus = 'PENDING'")
     fun getPendingCount(): Flow<Int>
+
+    @Query("SELECT * FROM sync_status WHERE syncStatus = 'SYNCED' ORDER BY lastUpdated DESC LIMIT :limit")
+    fun getRecentSynced(limit: Int): Flow<List<SyncStatusEntity>>
     
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSyncStatus(status: SyncStatusEntity)

@@ -25,13 +25,16 @@ class MediaRepository(
     /**
      * Get paged media items with sync status
      */
-    fun getPagedMediaWithStatus(): Flow<PagingData<MediaItem>> {
+    /**
+     * Get paged media items with sync status
+     */
+    fun getPagedMediaWithStatus(query: String = ""): Flow<PagingData<MediaItem>> {
         return Pager(
             config = PagingConfig(
                 pageSize = 50,
                 enablePlaceholders = false
             ),
-            pagingSourceFactory = { MediaPagingSource(contentResolver, syncStatusDao) }
+            pagingSourceFactory = { MediaPagingSource(contentResolver, syncStatusDao, query) }
         ).flow
     }
     
@@ -137,4 +140,52 @@ class MediaRepository(
      * Get pending count
      */
     fun getPendingCount(): Flow<Int> = syncStatusDao.getPendingCount()
+
+    /**
+     * Get recently synced media items
+     */
+    fun getRecentSyncedMedia(limit: Int = 10): Flow<List<MediaItem>> {
+        return syncStatusDao.getRecentSynced(limit).map { entities ->
+            entities.mapNotNull { entity ->
+                // fetch details from MediaStore
+                // This is a bit inefficient (N queries), but for small limit (10) it's fine.
+                // Optimally we'd do a batch query.
+                try {
+                    val uri = ContentUris.withAppendedId(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        entity.mediaId.toLong()
+                    )
+                    
+                    // Simple projection for display
+                    val projection = arrayOf(
+                        MediaStore.Images.Media.DISPLAY_NAME,
+                        MediaStore.Images.Media.DATE_MODIFIED
+                    )
+                    
+                    var item: MediaItem? = null
+                    
+                    contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val name = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
+                            val modified = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED))
+                            
+                            item = MediaItem(
+                                id = entity.mediaId,
+                                uri = uri,
+                                name = name,
+                                size = 0, // Not needed for thumbnail
+                                lastModified = modified,
+                                path = "", // Not needed
+                                hash = entity.hash,
+                                syncStatus = SyncStatus.SYNCED
+                            )
+                        }
+                    }
+                    item
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        }
+    }
 }

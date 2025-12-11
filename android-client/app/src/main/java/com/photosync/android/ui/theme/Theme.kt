@@ -15,53 +15,35 @@ import androidx.compose.ui.platform.LocalContext
 private val DarkColorScheme = darkColorScheme(
     primary = Primary,
     secondary = Secondary,
-    tertiary = Pink80,
+    tertiary = Tertiary,
     background = Background,
     surface = Surface,
     onPrimary = Color.Black,
     onSecondary = Color.White,
-    onBackground = Color.White,
-    onSurface = Color.White
+    onBackground = TextPrimary,
+    onSurface = TextPrimary,
+    surfaceVariant = SurfaceVariant,
+    onSurfaceVariant = TextSecondary,
+    error = Error
 )
 
-private val LightColorScheme = lightColorScheme(
-    primary = Primary,
-    secondary = Secondary,
-    tertiary = Pink40,
-    background = Background, // Enforce dark theme background even in light mode for consistency if desired, or map to a light variant
-    surface = Surface,
-    onPrimary = Color.Black,
-    onSecondary = Color.White,
-    onBackground = Color.White,
-    onSurface = Color.White
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
-)
+// We reuse the DarkColorScheme even for 'Light' to enforce the dark aesthetic
+private val LightColorScheme = DarkColorScheme
 
 @Composable
 fun PicsTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     // Dynamic color is available on Android 12+
-    // We default to false to enforce the app's custom theme matching the dashboard
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
+    // Always use DarkColorScheme or dynamic if strictly requested (but we prefer our custom look)
     val colorScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
-
-        darkTheme -> DarkColorScheme
-        else -> DarkColorScheme // Force Dark Scheme for now as per plan to match Dashboard constantly, or fallback to LightColorScheme if we had a proper light theme. Given the request, "match style" usually implies the dark look.
+        else -> DarkColorScheme
     }
 
     MaterialTheme(

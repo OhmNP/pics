@@ -2,14 +2,24 @@ package com.photosync.android.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Primary = Color(0xFF00d9ff)
-val PrimaryGlow = Color(0x6600d9ff)
-val Secondary = Color(0xFF8b5cf6)
-val SecondaryGlow = Color(0x668b5cf6)
-val Background = Color(0xFF1a1d2e)
-val Surface = Color(0xFF252836)
-val Error = Color(0xFFf87171)
-val Success = Color(0xFF10b981)
+val Primary = Color(0xFF00E5FF) // Neon Cyan
+val PrimaryGlow = Color(0x6600E5FF)
+val Secondary = Color(0xFF9C27B0) // Neon Pink/Purple
+val SecondaryGlow = Color(0xA39C27B0)
+val Tertiary = Color(0xFFBF5AF2) // Purple
+
+val Background = Color(0xFF0F111A) // Deep Navy/Black
+val Surface = Color(0xFF1E2130)    // Slightly lighter for cards
+val SurfaceVariant = Color(0xFF2A2D3E)
+
+val Success = Color(0xFF00E676) // Neon Green
+val Error = Color(0xFFFF1744)   // Neon Red
+
+// Glass Colors
+val GlassBackground = Color(0x261E2130) // Low opacity surface
+val GlassBorder = Color(0x26FFFFFF)     // Low opacity white
+val TextPrimary = Color.White
+val TextSecondary = Color(0xB3FFFFFF)   // 70% White
 
 val Purple80 = Color(0xFFD0BCFF)
 val PurpleGrey80 = Color(0xFFCCC2DC)

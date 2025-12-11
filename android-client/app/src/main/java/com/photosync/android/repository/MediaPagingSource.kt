@@ -13,7 +13,8 @@ import kotlinx.coroutines.withContext
 
 class MediaPagingSource(
     private val contentResolver: ContentResolver,
-    private val syncStatusDao: SyncStatusDao
+    private val syncStatusDao: SyncStatusDao,
+    private val searchQuery: String = ""
 ) : PagingSource<Int, MediaItem>() {
     
     override suspend fun load(params: LoadParams<Int>): LoadResult<Int, MediaItem> {
@@ -31,12 +32,24 @@ class MediaPagingSource(
                     MediaStore.Images.Media.DATA
                 )
                 
+                val selection = if (searchQuery.isNotEmpty()) {
+                    "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?"
+                } else {
+                    null
+                }
+                
+                val selectionArgs = if (searchQuery.isNotEmpty()) {
+                    arrayOf("%$searchQuery%")
+                } else {
+                    null
+                }
+                
                 // Query without LIMIT/OFFSET in the sort order (not supported on all Android versions)
                 contentResolver.query(
                     MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                     projection,
-                    null,
-                    null,
+                    selection,
+                    selectionArgs,
                     "${MediaStore.Images.Media.DATE_MODIFIED} DESC"
                 )?.use { cursor ->
                     // Skip to offset

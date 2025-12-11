@@ -36,6 +36,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     
     val syncedCount = mediaRepository.getSyncedCount()
     val pendingCount = mediaRepository.getPendingCount()
+    val recentUploads = mediaRepository.getRecentSyncedMedia(10)
     
     fun startSync() {
         val intent = Intent(getApplication(), EnhancedSyncService::class.java).apply {
