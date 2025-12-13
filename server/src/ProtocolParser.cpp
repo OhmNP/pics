@@ -1,145 +1,149 @@
 #include "ProtocolParser.h"
+#include "ConfigManager.h"
 #include "Logger.h"
-#include <algorithm>
-#include <sstream>
+#include <cstring>
+#include <iostream>
 
-ParsedCommand ProtocolParser::parse(const std::string &message) {
-  ParsedCommand cmd;
-  cmd.type = CommandType::UNKNOWN;
+#ifdef _WIN32
+#include <winsock2.h>
+#else
+#include <arpa/inet.h>
+#endif
 
-  auto parts = split(message, ' ');
-  if (parts.empty()) {
-    return cmd;
+// Helper for endianness
+static uint32_t toNetworkOrder(uint32_t val) { return htonl(val); }
+static uint32_t fromNetworkOrder(uint32_t val) { return ntohl(val); }
+
+std::vector<char> ProtocolParser::serializePacket(const Packet &packet) {
+  std::vector<char> buffer;
+  size_t totalSize = sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint8_t) +
+                     sizeof(uint32_t) + packet.payload.size();
+  buffer.resize(totalSize);
+
+  char *ptr = buffer.data();
+
+  // manually pack to avoid struct padding implementation differences
+  uint16_t magic = htons(packet.header.magic);
+  std::memcpy(ptr, &magic, sizeof(magic));
+  ptr += sizeof(magic);
+
+  std::memcpy(ptr, &packet.header.version, sizeof(uint8_t));
+  ptr += sizeof(uint8_t);
+
+  uint8_t type = static_cast<uint8_t>(packet.header.type);
+  std::memcpy(ptr, &type, sizeof(uint8_t));
+  ptr += sizeof(uint8_t);
+
+  uint32_t len = toNetworkOrder(packet.header.payloadLength);
+  std::memcpy(ptr, &len, sizeof(len));
+  ptr += sizeof(len);
+
+  if (!packet.payload.empty()) {
+    std::memcpy(ptr, packet.payload.data(), packet.payload.size());
   }
 
-  std::string command = parts[0];
+  return buffer;
+}
 
-  if (command == "HELLO") {
-    cmd.type = CommandType::SESSION_START;
-    if (parts.size() > 1) {
-      cmd.data = parts[1]; // deviceId
-    }
-    if (parts.size() > 2) {
-      cmd.token = parts[2]; // pairing token
-    }
-  } else if (command == "BEGIN_BATCH") {
-    cmd.type = CommandType::BATCH_START;
-    if (parts.size() > 1) {
-      try {
-        cmd.batchSize = std::stoi(parts[1]);
-      } catch (const std::exception &) {
-        LOG_ERROR("Invalid batch size: " + parts[1]);
-        cmd.type = CommandType::UNKNOWN;
-      }
-    }
-  } else if (command == "PHOTO") {
-    cmd.type = CommandType::PHOTO_METADATA;
-    cmd.photo = parsePhotoMetadata(message);
-    if (cmd.photo.filename.empty()) {
-      cmd.type = CommandType::UNKNOWN;
-    }
-  } else if (command == "DATA_TRANSFER") {
-    cmd.type = CommandType::DATA_TRANSFER;
-    if (parts.size() > 1) {
-      try {
-        cmd.dataSize = std::stoll(parts[1]);
-      } catch (const std::exception &) {
-        LOG_ERROR("Invalid data size: " + parts[1]);
-        cmd.type = CommandType::UNKNOWN;
-      }
-    }
-  } else if (command == "RESUME_UPLOAD") {
-    cmd.type = CommandType::RESUME_UPLOAD;
-    if (parts.size() > 1) {
-      cmd.hash = parts[1];
-    }
-  } else if (command == "BATCH_CHECK") { // NEW
-    cmd.type = CommandType::BATCH_CHECK;
-    if (parts.size() > 1) {
-      try {
-        cmd.batchCheckCount = std::stoi(parts[1]);
-      } catch (const std::exception &) {
-        LOG_ERROR("Invalid batch check count: " + parts[1]);
-        cmd.type = CommandType::UNKNOWN;
-      }
-    }
-  } else if (command == "BATCH_END") {
-    cmd.type = CommandType::BATCH_END;
-  } else if (command == "END_SESSION") {
-    cmd.type = CommandType::SESSION_END;
+Packet
+ProtocolParser::deserializePacketHeader(const std::vector<char> &headerData) {
+  Packet packet;
+  if (headerData.size() < 8) { // 2+1+1+4
+    throw std::runtime_error("Header too short");
   }
 
-  return cmd;
+  const char *ptr = headerData.data();
+
+  uint16_t magic;
+  std::memcpy(&magic, ptr, sizeof(magic));
+  ptr += sizeof(magic);
+  packet.header.magic = ntohs(magic);
+
+  std::memcpy(&packet.header.version, ptr, sizeof(uint8_t));
+  ptr += sizeof(uint8_t);
+
+  uint8_t typeVal;
+  std::memcpy(&typeVal, ptr, sizeof(uint8_t));
+  ptr += sizeof(uint8_t);
+  packet.header.type = static_cast<PacketType>(typeVal);
+
+  uint32_t len;
+  std::memcpy(&len, ptr, sizeof(len));
+  ptr += sizeof(len);
+  packet.header.payloadLength = fromNetworkOrder(len);
+
+  return packet;
 }
 
-PhotoMetadata ProtocolParser::parsePhotoMetadata(const std::string &line) {
-  PhotoMetadata photo;
-  auto parts = split(line, ' ');
+// Helpers
+static Packet createJsonPacket(PacketType type, const json &j) {
+  Packet p;
+  p.header.magic = PROTOCOL_MAGIC;
+  p.header.version = PROTOCOL_VERSION;
+  p.header.type = type;
 
-  if (parts.size() >= 4) {
-    photo.filename = parts[1];
-    try {
-      photo.size = std::stoll(parts[2]);
-      photo.hash = parts[3];
-    } catch (const std::exception &) {
-      LOG_ERROR("Invalid photo size: " + parts[2]);
-      // Return empty filename to indicate error
-      photo.filename = "";
-    }
+  std::string s = j.dump();
+  p.payload.assign(s.begin(), s.end());
+  p.header.payloadLength = (uint32_t)p.payload.size();
+  return p;
+}
+
+Packet ProtocolParser::createDiscoveryPacket(int port,
+                                             const std::string &name) {
+  json j;
+  j["service"] = "photosync";
+  j["port"] = port;
+  j["serverName"] = name;
+  return createJsonPacket(PacketType::DISCOVERY, j);
+}
+
+Packet ProtocolParser::createPairingResponse(int sessionId, bool success,
+                                             const std::string &msg) {
+  json j;
+  j["sessionId"] = sessionId;
+  j["success"] = success;
+  if (!msg.empty())
+    j["message"] = msg;
+  return createJsonPacket(PacketType::PAIRING_RESPONSE, j);
+}
+
+Packet ProtocolParser::createHeartbeatPacket() {
+  Packet p;
+  p.header.magic = PROTOCOL_MAGIC;
+  p.header.version = PROTOCOL_VERSION;
+  p.header.type = PacketType::HEARTBEAT;
+  p.header.payloadLength = 0;
+  return p;
+}
+
+Packet ProtocolParser::createTransferReadyPacket(long long offset) {
+  json j;
+  j["status"] = "READY";
+  j["offset"] = offset;
+  return createJsonPacket(PacketType::TRANSFER_READY, j);
+}
+
+Packet
+ProtocolParser::createTransferCompletePacket(const std::string &fileHash) {
+  json j;
+  j["status"] = "COMPLETE";
+  j["hash"] = fileHash;
+  return createJsonPacket(PacketType::TRANSFER_COMPLETE, j);
+}
+
+Packet ProtocolParser::createErrorPacket(const std::string &message) {
+  json j;
+  j["error"] = message;
+  return createJsonPacket(PacketType::PROTOCOL_ERROR, j);
+}
+
+json ProtocolParser::parsePayload(const Packet &packet) {
+  if (packet.payload.empty())
+    return json({});
+  try {
+    std::string s(packet.payload.begin(), packet.payload.end());
+    return json::parse(s);
+  } catch (...) {
+    return json({});
   }
-
-  return photo;
-}
-
-std::string ProtocolParser::createAck(const std::string &message) {
-  if (message.empty()) {
-    return "ACK\n";
-  }
-  return "ACK " + message + "\n";
-}
-
-std::string ProtocolParser::createSessionAck(int sessionId) {
-  return "SESSION_START " + std::to_string(sessionId) + "\n";
-}
-
-std::string ProtocolParser::createSendResponse(long long offset) {
-  if (offset > 0) {
-    return "SEND " + std::to_string(offset) + "\n";
-  }
-  return "SEND\n";
-}
-
-std::string ProtocolParser::createSkipResponse() { return "SKIP\n"; }
-
-std::string ProtocolParser::createBatchResultResponse(int count) { // NEW
-  return "BATCH_RESULT " + std::to_string(count) + "\n";
-}
-
-std::string ProtocolParser::createError(const std::string &message) {
-  return "ERROR " + message + "\n";
-}
-
-std::vector<std::string> ProtocolParser::split(const std::string &str,
-                                               char delimiter) {
-  std::vector<std::string> tokens;
-  std::string token;
-  std::istringstream tokenStream(str);
-
-  while (std::getline(tokenStream, token, delimiter)) {
-    std::string trimmed = trim(token);
-    if (!trimmed.empty()) {
-      tokens.push_back(trimmed);
-    }
-  }
-
-  return tokens;
-}
-
-std::string ProtocolParser::trim(const std::string &str) {
-  size_t first = str.find_first_not_of(" \t\r\n");
-  if (first == std::string::npos) {
-    return "";
-  }
-  size_t last = str.find_last_not_of(" \t\r\n");
-  return str.substr(first, (last - first + 1));
 }

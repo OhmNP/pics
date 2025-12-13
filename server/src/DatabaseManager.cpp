@@ -141,24 +141,6 @@ bool DatabaseManager::createSchema() {
   if (!executeSQL(createMetadataTable))
     return false;
 
-  const char *createAuditLogsTable = R"(
-        CREATE TABLE IF NOT EXISTS audit_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            action TEXT NOT NULL,
-            target_type TEXT,
-            target_id TEXT,
-            details TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            ip_address TEXT,
-            FOREIGN KEY(user_id) REFERENCES admin_users(id)
-        );
-    )";
-
-  const char *createAuditLogsTimestampIndex = R"(
-        CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
-    )";
-
   const char *createPairingTokensTable = R"(
         CREATE TABLE IF NOT EXISTS pairing_tokens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,11 +156,6 @@ bool DatabaseManager::createSchema() {
   if (!executeSQL(createMetadataHashIndex))
     return false;
   if (!executeSQL(createMetadataClientIndex))
-    return false;
-
-  if (!executeSQL(createAuditLogsTable))
-    return false;
-  if (!executeSQL(createAuditLogsTimestampIndex))
     return false;
 
   if (!executeSQL(createAdminUsersTable))
@@ -1220,318 +1197,7 @@ bool DatabaseManager::migratePhotosToMetadata() {
   return true;
 }
 
-void DatabaseManager::checkStorageIntegrity(const std::string &storagePath) {
-  LOG_INFO("Starting storage integrity check and repair...");
-
-  // 1. Scan filesystem to build Hash -> Path map
-  std::map<std::string, std::string> fsFiles;
-  try {
-    if (fs::exists(storagePath)) {
-      for (const auto &entry : fs::recursive_directory_iterator(storagePath)) {
-        if (entry.is_regular_file()) {
-          std::string fullPath = entry.path().string();
-          // Normalize path separators to forward slashes for consistency
-          std::replace(fullPath.begin(), fullPath.end(), '\\', '/');
-
-          std::string filename = entry.path().filename().string();
-
-          if (filename.find("thumbnails") != std::string::npos ||
-              fullPath.find("/thumbnails/") != std::string::npos ||
-              fullPath.find("/temp/") != std::string::npos) {
-            continue;
-          }
-
-          // Extract hash (remove extension)
-          size_t dotPos = filename.find_last_of('.');
-          std::string hash = (dotPos != std::string::npos)
-                                 ? filename.substr(0, dotPos)
-                                 : filename;
-
-          fsFiles[hash] = fullPath;
-        }
-      }
-    }
-  } catch (const std::exception &e) {
-    LOG_ERROR("Error iterating storage directory: " + std::string(e.what()));
-    return;
-  }
-  LOG_INFO("Found " + std::to_string(fsFiles.size()) + " files in storage.");
-
-  // 2. Get all photos from DB
-  std::set<std::string> dbHashes;
-  std::vector<std::tuple<int, std::string, std::string>>
-      filesToCheck; // id, hash, path
-
-  sqlite3_stmt *stmt;
-  const char *sql = "SELECT id, hash, original_path FROM metadata";
-
-  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-    LOG_ERROR("Failed to prepare integrity check statement");
-    return;
-  }
-
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    int id = sqlite3_column_int(stmt, 0);
-    const char *hashStr =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-    const char *pathStr =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
-
-    std::string hash = hashStr ? hashStr : "";
-    std::string path = pathStr ? pathStr : "";
-
-    if (!hash.empty()) {
-      dbHashes.insert(hash);
-      filesToCheck.emplace_back(id, hash, path);
-    }
-  }
-  sqlite3_finalize(stmt);
-
-  LOG_INFO("Checked " + std::to_string(filesToCheck.size()) +
-           " database records.");
-
-  // 3. Check for missing files and Repair
-  int missingCount = 0;
-  int repairedCount = 0;
-
-  sqlite3_stmt *updateStmt;
-  const char *updateSql = "UPDATE metadata SET original_path = ? WHERE id = ?";
-  if (sqlite3_prepare_v2(db_, updateSql, -1, &updateStmt, nullptr) !=
-      SQLITE_OK) {
-    LOG_ERROR("Failed to prepare update statement");
-    return;
-  }
-
-  for (const auto &t : filesToCheck) {
-    int id = std::get<0>(t);
-    std::string hash = std::get<1>(t);
-    std::string path = std::get<2>(t);
-
-    bool exists = !path.empty() && fs::exists(path);
-
-    if (!exists) {
-      // Try to find by hash
-      if (fsFiles.count(hash)) {
-        std::string newPath = fsFiles[hash];
-        LOG_WARN("Repaired missing path for photo ID " + std::to_string(id) +
-                 ". Old: '" + path + "', New: '" + newPath + "'");
-
-        sqlite3_bind_text(updateStmt, 1, newPath.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(updateStmt, 2, id);
-        if (sqlite3_step(updateStmt) == SQLITE_DONE) {
-          repairedCount++;
-        } else {
-          LOG_ERROR("Failed to update path in DB");
-        }
-        sqlite3_reset(updateStmt);
-      } else {
-        LOG_WARN("Missing file for photo ID " + std::to_string(id) +
-                 " [Hash: " + hash + "]: " + path);
-        missingCount++;
-      }
-    }
-  }
-  sqlite3_finalize(updateStmt);
-
-  if (repairedCount > 0) {
-    LOG_INFO("Successfully repaired " + std::to_string(repairedCount) +
-             " photo paths.");
-  }
-
-  if (missingCount == 0) {
-    LOG_INFO("No missing files found (after repair).");
-  } else {
-    LOG_WARN("Found " + std::to_string(missingCount) +
-             " missing files in storage.");
-  }
-
-  // 4. Check for orphaned files
-  int orphanedCount = 0;
-  for (const auto &pair : fsFiles) {
-    if (dbHashes.find(pair.first) == dbHashes.end()) {
-      LOG_WARN("Orphaned file found: " + pair.second);
-      orphanedCount++;
-    }
-  }
-
-  if (orphanedCount == 0) {
-    LOG_INFO("No orphaned files found.");
-  } else {
-    LOG_WARN("Found " + std::to_string(orphanedCount) +
-             " orphaned files in storage.");
-  }
-
-  LOG_INFO("Storage integrity check completed.");
-}
-
-DatabaseManager::StorageStats DatabaseManager::getStorageStats() {
-  StorageStats stats;
-  sqlite3_stmt *stmt;
-
-  // 1. Total storage and files
-  stats.totalStorageUsed = getTotalStorageUsed();
-  stats.totalFiles = getTotalPhotoCount();
-
-  // 2. Client storage
-  const char *clientSql =
-      "SELECT client_id, SUM(size) FROM metadata GROUP BY client_id";
-  if (sqlite3_prepare_v2(db_, clientSql, -1, &stmt, nullptr) == SQLITE_OK) {
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-      int clientId = sqlite3_column_int(stmt, 0);
-      long long size = sqlite3_column_int64(stmt, 1);
-      stats.clientStorage[clientId] = size;
-    }
-    sqlite3_finalize(stmt);
-  } else {
-    LOG_ERROR("Failed to prepare client storage stats: " +
-              std::string(sqlite3_errmsg(db_)));
-  }
-
-  // 3. Mime type storage
-  const char *mimeSql =
-      "SELECT mime_type, SUM(size) FROM metadata GROUP BY mime_type";
-  if (sqlite3_prepare_v2(db_, mimeSql, -1, &stmt, nullptr) == SQLITE_OK) {
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-      const char *mimeType =
-          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
-      long long size = sqlite3_column_int64(stmt, 1);
-
-      std::string mimeStr = mimeType ? mimeType : "unknown";
-      stats.mimeTypeStorage[mimeStr] = size;
-    }
-    sqlite3_finalize(stmt);
-  } else {
-    LOG_ERROR("Failed to prepare mime storage stats: " +
-              std::string(sqlite3_errmsg(db_)));
-  }
-
-  return stats;
-}
-
 // Log operations implementation
-
-bool DatabaseManager::createLog(const std::string &level,
-                                const std::string &message,
-                                const std::string &context) {
-  const char *sql =
-      "INSERT INTO logs (level, message, context) VALUES (?, ?, ?);";
-  sqlite3_stmt *stmt;
-
-  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-    LOG_ERROR("Failed to prepare createLog: " +
-              std::string(sqlite3_errmsg(db_)));
-    return false;
-  }
-
-  sqlite3_bind_text(stmt, 1, level.c_str(), -1, SQLITE_STATIC);
-  sqlite3_bind_text(stmt, 2, message.c_str(), -1, SQLITE_STATIC);
-  sqlite3_bind_text(stmt, 3, context.c_str(), -1, SQLITE_STATIC);
-
-  bool success = (sqlite3_step(stmt) == SQLITE_DONE);
-  sqlite3_finalize(stmt);
-  return success;
-}
-
-std::vector<DatabaseManager::LogEntry>
-DatabaseManager::getLogs(int limit, int offset, const std::string &level,
-                         bool onlyUnread) {
-  std::vector<LogEntry> logs;
-  std::string sql =
-      "SELECT id, level, message, timestamp, context, read FROM logs";
-  std::vector<std::string> conditions;
-
-  if (!level.empty()) {
-    conditions.push_back("level = ?");
-  }
-  if (onlyUnread) {
-    conditions.push_back("read = 0");
-  }
-
-  if (!conditions.empty()) {
-    sql += " WHERE ";
-    for (size_t i = 0; i < conditions.size(); ++i) {
-      if (i > 0)
-        sql += " AND ";
-      sql += conditions[i];
-    }
-  }
-
-  sql += " ORDER BY timestamp DESC LIMIT ? OFFSET ?";
-
-  sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
-    LOG_ERROR("Failed to prepare getLogs: " + std::string(sqlite3_errmsg(db_)));
-    return logs;
-  }
-
-  int bindIndex = 1;
-  if (!level.empty()) {
-    sqlite3_bind_text(stmt, bindIndex++, level.c_str(), -1, SQLITE_STATIC);
-  }
-  sqlite3_bind_int(stmt, bindIndex++, limit);
-  sqlite3_bind_int(stmt, bindIndex++, offset);
-
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    LogEntry log;
-    log.id = sqlite3_column_int(stmt, 0);
-    log.level = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-    log.message = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
-    log.timestamp =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3));
-    const char *ctx =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
-    log.context = ctx ? ctx : "";
-    log.read = sqlite3_column_int(stmt, 5);
-    logs.push_back(log);
-  }
-
-  sqlite3_finalize(stmt);
-  return logs;
-}
-
-int DatabaseManager::getUnreadLogCount() {
-  const char *sql = "SELECT COUNT(*) FROM logs WHERE read = 0;";
-  sqlite3_stmt *stmt;
-  int count = 0;
-
-  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-      count = sqlite3_column_int(stmt, 0);
-    }
-    sqlite3_finalize(stmt);
-  }
-  return count;
-}
-
-bool DatabaseManager::markLogAsRead(int logId) {
-  const char *sql = "UPDATE logs SET read = 1 WHERE id = ?;";
-  sqlite3_stmt *stmt;
-
-  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-    return false;
-  }
-
-  sqlite3_bind_int(stmt, 1, logId);
-  bool success = (sqlite3_step(stmt) == SQLITE_DONE);
-  sqlite3_finalize(stmt);
-  return success;
-}
-
-bool DatabaseManager::markAllLogsAsRead() {
-  return executeSQL("UPDATE logs SET read = 1;");
-}
-
-int DatabaseManager::cleanupOldLogs(int daysToKeep) {
-  std::string sql = "DELETE FROM logs WHERE timestamp < date('now', '-" +
-                    std::to_string(daysToKeep) + " days');";
-  // Using executeSQL for simple query, but need count of changes.
-  // executeSQL returns bool.
-  // Let's just use it.
-  if (executeSQL(sql)) {
-    return sqlite3_changes(db_);
-  }
-  return 0;
-}
 
 DatabaseManager::ClientRecord DatabaseManager::getClientDetails(int clientId) {
   ClientRecord client = {-1, "", "", 0, 0};
@@ -1558,7 +1224,7 @@ DatabaseManager::ClientRecord DatabaseManager::getClientDetails(int clientId) {
               std::string(sqlite3_errmsg(db_)));
   }
 
-  // Get storage usage specially
+  // Get storage usage specially (Simplified, removed StorageStats usage)
   const char *storageSql =
       "SELECT SUM(size) FROM metadata WHERE client_id = ?;";
   if (sqlite3_prepare_v2(db_, storageSql, -1, &stmt, nullptr) == SQLITE_OK) {
@@ -1573,13 +1239,11 @@ DatabaseManager::ClientRecord DatabaseManager::getClientDetails(int clientId) {
 }
 
 std::string DatabaseManager::generatePairingToken() {
-  // Generate a 6-digit random code
   std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_int_distribution<> distrib(100000, 999999);
   std::string token = std::to_string(distrib(gen));
 
-  // Expiry: 15 minutes from now
   auto now = std::chrono::system_clock::now();
   auto expires = now + std::chrono::minutes(15);
   std::time_t expiresTime = std::chrono::system_clock::to_time_t(expires);
@@ -1598,7 +1262,7 @@ std::string DatabaseManager::generatePairingToken() {
     if (sqlite3_step(stmt) != SQLITE_DONE) {
       LOG_ERROR("Failed to insert pairing token: " +
                 std::string(sqlite3_errmsg(db_)));
-      token = ""; // Failure
+      token = "";
     }
     sqlite3_finalize(stmt);
   } else {
@@ -1648,106 +1312,6 @@ int DatabaseManager::cleanupExpiredPairingTokens() {
     }
     sqlite3_finalize(stmt);
   }
-  return count;
-}
-
-// Audit Log Implementation
-
-bool DatabaseManager::logActivity(int userId, const std::string &action,
-                                  const std::string &targetType,
-                                  const std::string &targetId,
-                                  const std::string &details,
-                                  const std::string &ipAddress) {
-  const char *sql = "INSERT INTO audit_logs (user_id, action, target_type, "
-                    "target_id, details, ip_address) VALUES (?, ?, ?, ?, ?, ?)";
-  sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-    LOG_ERROR("Failed to prepare logActivity: " +
-              std::string(sqlite3_errmsg(db_)));
-    return false;
-  }
-
-  sqlite3_bind_int(stmt, 1, userId);
-  sqlite3_bind_text(stmt, 2, action.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 3, targetType.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 4, targetId.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 5, details.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 6, ipAddress.c_str(), -1, SQLITE_TRANSIENT);
-
-  bool success = (sqlite3_step(stmt) == SQLITE_DONE);
-  sqlite3_finalize(stmt);
-  return success;
-}
-
-std::vector<DatabaseManager::AuditLogEntry>
-DatabaseManager::getAuditLogs(int limit, int offset) {
-  std::vector<AuditLogEntry> logs;
-  // Join with admin_users to get username
-  const char *sql =
-      "SELECT a.id, a.user_id, u.username, a.action, a.target_type, "
-      "a.target_id, a.details, a.timestamp, a.ip_address "
-      "FROM audit_logs a "
-      "LEFT JOIN admin_users u ON a.user_id = u.id "
-      "ORDER BY a.timestamp DESC "
-      "LIMIT ? OFFSET ?";
-  sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-    LOG_ERROR("Failed to prepare getAuditLogs: " +
-              std::string(sqlite3_errmsg(db_)));
-    return logs;
-  }
-
-  sqlite3_bind_int(stmt, 1, limit);
-  sqlite3_bind_int(stmt, 2, offset);
-
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    AuditLogEntry log;
-    log.id = sqlite3_column_int(stmt, 0);
-    log.userId = sqlite3_column_int(stmt, 1);
-    const char *user =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
-    log.username = user ? user : "Unknown";
-    log.action = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3));
-
-    const char *tType =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
-    log.targetType = tType ? tType : "";
-
-    const char *tId =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 5));
-    log.targetId = tId ? tId : "";
-
-    const char *dets =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 6));
-    log.details = dets ? dets : "";
-
-    log.timestamp =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 7));
-
-    const char *ip =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 8));
-    log.ipAddress = ip ? ip : "";
-
-    logs.push_back(log);
-  }
-  sqlite3_finalize(stmt);
-  return logs;
-}
-
-int DatabaseManager::getAuditLogCount() {
-  const char *sql = "SELECT COUNT(*) FROM audit_logs";
-  sqlite3_stmt *stmt;
-
-  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-    return 0;
-  }
-
-  int count = 0;
-  if (sqlite3_step(stmt) == SQLITE_ROW) {
-    count = sqlite3_column_int(stmt, 0);
-  }
-
-  sqlite3_finalize(stmt);
   return count;
 }
 

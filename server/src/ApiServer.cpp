@@ -211,36 +211,6 @@ void ApiServer::setupRoutes() {
         return res;
       });
 
-  // GET /api/audit - Audit logs
-  CROW_ROUTE((*g_app), "/api/audit")
-      .methods("GET"_method)([this](const crow::request &req) {
-        std::string authHeader = req.get_header_value("Authorization");
-        int userId = -1;
-        if (!validateSession(authHeader, userId)) {
-          return crow::response(401);
-        }
-
-        int page = req.url_params.get("page")
-                       ? std::stoi(req.url_params.get("page"))
-                       : 1;
-        int limit = req.url_params.get("limit")
-                        ? std::stoi(req.url_params.get("limit"))
-                        : 50;
-
-        auto res = crow::response(handleGetAuditLogs(page, limit));
-        res.add_header("Access-Control-Allow-Origin", "*");
-        res.add_header("Content-Type", "application/json");
-        return res;
-      });
-
-  // GET /api/health - Server health metrics
-  CROW_ROUTE((*g_app), "/api/health").methods("GET"_method)([this]() {
-    auto res = crow::response(handleGetHealth());
-    res.add_header("Access-Control-Allow-Origin", "*");
-    res.add_header("Content-Type", "application/json");
-    return res;
-  });
-
   // GET /api/network - Network Info (IPs)
   CROW_ROUTE((*g_app), "/api/network").methods("GET"_method)([this]() {
     auto res = crow::response(handleGetNetworkInfo());
@@ -795,8 +765,7 @@ std::string ApiServer::handlePostLogout(const crow::request &req) {
     LOG_INFO("User logged out");
 
     if (userId != -1) {
-      db_.logActivity(userId, "LOGOUT", "SESSION", token, "User logged out",
-                      ipAddress);
+      // db_.logActivity removed
     }
 
     json response = {{"success", true}};
@@ -1037,103 +1006,6 @@ void ApiServer::handleGetMediaDownload(crow::response &res, int photoId) {
     res.write("Internal server error");
   }
 }
-std::string ApiServer::handleGetHealth() {
-  try {
-    long long storageUsed = db_.getTotalStorageUsed();
-    long long storageLimit = config_.getMaxStorageGB() * 1073741824LL;
-    double utilization =
-        (storageLimit > 0) ? (double)storageUsed / storageLimit * 100.0 : 0.0;
-
-    // TODO: Get real uptime if possible, for now 0 or static
-    long uptime = 0;
-
-    json response = {
-        {"uptime", uptime},
-        {"storage",
-         {{"used", storageUsed},
-          {"limit", storageLimit},
-          {"utilizationPercent", utilization},
-          {"trend", json::array()}}},
-        {"queue",
-         {{"thumbnailGeneration", 0},
-          {"sessionCleanup", 0},
-          {"logCleanup", 0}}},
-        {"system",
-         {{"cpu", nullptr},
-          {"ram", nullptr},
-          {"note",
-           "CPU/RAM metrics are placeholders for future implementation"}}},
-        {"lastUpdated", db_.getCurrentTimestamp()}};
-    return response.dump();
-  } catch (const std::exception &e) {
-    LOG_ERROR("Error in handleGetHealth: " + std::string(e.what()));
-    json error = {{"error", e.what()}};
-    return error.dump();
-  }
-}
-
-std::string ApiServer::handleGetStorageOverview() {
-  try {
-    DatabaseManager::StorageStats stats = db_.getStorageStats();
-
-    json clientStats = json::array();
-    for (auto const &[clientId, size] : stats.clientStorage) {
-      // Need to get client details to map ID to deviceId
-      // This is inefficient but functional for now.
-      // Better approach: getStorageStats returns vector of structs with
-      // deviceId.
-      clientStats.push_back({{"clientId", clientId}, {"storageUsed", size}});
-    }
-
-    // Convert map to object for JSON
-    json mimeStats = json::object();
-    for (auto const &[mime, size] : stats.mimeTypeStorage) {
-      mimeStats[mime] = size;
-    }
-
-    json response = {{"totalStorageUsed", stats.totalStorageUsed},
-                     {"totalFiles", stats.totalFiles},
-                     {"storageLimit", config_.getMaxStorageGB() * 1073741824LL},
-                     {"utilizationPercent",
-                      (config_.getMaxStorageGB() > 0)
-                          ? (double)stats.totalStorageUsed /
-                                (config_.getMaxStorageGB() * 1073741824LL) *
-                                100.0
-                          : 0.0},
-                     {"byClient", clientStats},
-                     {"byFileType", mimeStats}};
-
-    return response.dump();
-  } catch (const std::exception &e) {
-    LOG_ERROR("Error in handleGetStorageOverview: " + std::string(e.what()));
-    json error = {{"error", e.what()}};
-    return error.dump();
-  }
-}
-
-std::string ApiServer::handleGetLogs() {
-  try {
-    // Basic implementation: get last 50 unread logs or just last 50
-    // For now, let's get last 50 logs of any type
-    std::vector<DatabaseManager::LogEntry> logs = db_.getLogs(50);
-    json response = json::array();
-
-    for (const auto &log : logs) {
-      response.push_back({{"id", log.id},
-                          {"level", log.level},
-                          {"message", log.message},
-                          {"timestamp", log.timestamp},
-                          {"context", log.context},
-                          {"read", log.read}});
-    }
-
-    return response.dump();
-  } catch (const std::exception &e) {
-    LOG_ERROR("Error in handleGetLogs: " + std::string(e.what()));
-    json error = {{"error", e.what()}};
-    return error.dump();
-  }
-}
 
 std::string ApiServer::handleGetClientDetails(int clientId) {
   try {
@@ -1177,8 +1049,7 @@ std::string ApiServer::handlePostGenerateToken(const crow::request &req) {
     }
 
     if (userId != -1) {
-      db_.logActivity(userId, "GENERATE_TOKEN", "PAIRING_TOKEN", pairingToken,
-                      "Generated pairing token", ipAddress);
+      // db_.logActivity removed
     }
 
     json response = {
@@ -1195,47 +1066,7 @@ std::string ApiServer::handlePostGenerateToken(const crow::request &req) {
   }
 }
 
-std::string ApiServer::handleGetAuditLogs(int page, int limit) {
-  try {
-    if (page < 1)
-      page = 1;
-    if (limit <= 0)
-      limit = 50;
-    int offset = (page - 1) * limit;
-
-    auto logs = db_.getAuditLogs(limit, offset);
-    json items = json::array();
-
-    for (const auto &log : logs) {
-      items.push_back({{"id", log.id},
-                       {"userId", log.userId},
-                       {"username", log.username},
-                       {"action", log.action},
-                       {"targetType", log.targetType},
-                       {"targetId", log.targetId},
-                       {"details", log.details},
-                       {"timestamp", log.timestamp},
-                       {"ipAddress", log.ipAddress}});
-    }
-
-    int total = db_.getAuditLogCount();
-
-    json result = {
-        {"items", items},
-        {"pagination",
-         {{"page", page},
-          {"limit", limit},
-          {"total", total},
-          {"pages", (limit > 0) ? (total + limit - 1) / limit : 0}}}};
-
-    return result.dump();
-
-  } catch (const std::exception &e) {
-    LOG_ERROR("Error in handleGetAuditLogs: " + std::string(e.what()));
-    json error = {{"error", e.what()}};
-    return error.dump();
-  }
-}
+// handleGetAuditLogs removed
 
 // GET /api/network - Network Info implementation
 std::string ApiServer::handleGetNetworkInfo() {

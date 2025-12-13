@@ -44,10 +44,6 @@ ApiServer::handlePostRegenerateThumbnails(const crow::request &req) {
         // "cleared"
         // Always return success even if directory didn't match, as state is
         // "cleared"
-        if (userId != -1) {
-          db_.logActivity(userId, "REGENERATE_THUMBNAILS", "SYSTEM", "ALL",
-                          "Cleared all thumbnails", ipAddress);
-        }
         return json({{"success", true},
                      {"message", "All thumbnails cleared. They will be "
                                  "regenerated on demand."}})
@@ -70,11 +66,6 @@ ApiServer::handlePostRegenerateThumbnails(const crow::request &req) {
       PhotoMetadata photo = db_.getPhotoById(photoId);
       if (photo.id != -1) {
         if (ThumbnailGenerator::generateThumbnail(photo.originalPath, path)) {
-          if (userId != -1) {
-            db_.logActivity(userId, "REGENERATE_THUMBNAILS", "PHOTO",
-                            std::to_string(photoId), "Regenerated thumbnail",
-                            ipAddress);
-          }
           return json({{"success", true}, {"message", "Thumbnail regenerated"}})
               .dump();
         } else {

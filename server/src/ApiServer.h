@@ -47,11 +47,7 @@ private:
   std::string handleGetConnections();
   std::string handleGetConfig();
   std::string handlePostConfig(const std::string &requestBody);
-  std::string handleGetHealth();
-  std::string handleGetStorageOverview();
   std::string handleGetNetworkInfo();
-
-  std::string handleGetLogs();
 
   // Authentication endpoint handlers
   std::string handlePostLogin(const crow::request &req);
@@ -70,5 +66,4 @@ private:
   void handleGetMediaDownload(crow::response &res, int photoId);
   std::string handlePostGenerateToken(const crow::request &req);
   std::string handlePostRegenerateThumbnails(const crow::request &req);
-  std::string handleGetAuditLogs(int page, int limit);
 };

@@ -1,46 +1,62 @@
 #pragma once
 
 #include "DatabaseManager.h"
+#include <cstdint>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
-enum class CommandType {
-  SESSION_START,
-  BATCH_START,
-  PHOTO_METADATA,
-  DATA_TRANSFER, // NEW
-  RESUME_UPLOAD, // NEW
-  BATCH_CHECK,   // NEW for Reconciliation
-  BATCH_END,
-  SESSION_END,
-  UNKNOWN
+
+using json = nlohmann::json;
+
+// Protocol Constants
+const uint16_t PROTOCOL_MAGIC = 0x5048; // "PH"
+const uint8_t PROTOCOL_VERSION = 1;
+
+enum class PacketType : uint8_t {
+  DISCOVERY = 0x01,
+  PAIRING_REQUEST = 0x02,
+  PAIRING_RESPONSE = 0x03,
+  HEARTBEAT = 0x04,
+  METADATA = 0x05,
+  TRANSFER_READY = 0x06,
+  FILE_CHUNK = 0x07,
+  TRANSFER_COMPLETE = 0x08,
+  PROTOCOL_ERROR = 0x09
 };
 
-struct ParsedCommand {
-  CommandType type;
-  std::string data;
-  int batchSize;       // For BATCH_START
-  PhotoMetadata photo; // For PHOTO_METADATA
-  long long dataSize;  // For DATA_TRANSFER
-  std::string hash;    // For RESUME_UPLOAD
-  int batchCheckCount; // For BATCH_CHECK
-  std::string token;   // For SESSION_START (Pairing)
+struct PacketHeader {
+  uint16_t magic = PROTOCOL_MAGIC;
+  uint8_t version = PROTOCOL_VERSION;
+  PacketType type;
+  uint32_t payloadLength;
+};
+
+struct Packet {
+  PacketHeader header;
+  std::vector<char> payload;
 };
 
 class ProtocolParser {
 public:
-  static ParsedCommand parse(const std::string &message);
-  static PhotoMetadata parsePhotoMetadata(const std::string &line);
+  // Serialization
+  static std::vector<char> serializePacket(const Packet &packet);
+  static Packet deserializePacketHeader(const std::vector<char> &headerData);
 
-  // Response generators
-  static std::string createAck(const std::string &message);
-  static std::string createSessionAck(int sessionId);
-  static std::string createSendResponse(long long offset = 0); // NEW
-  static std::string createSkipResponse();                     // NEW
-  static std::string createBatchResultResponse(int count);     // NEW
-  static std::string createError(const std::string &message);
+  // High-level Packet Creators
+  static Packet createDiscoveryPacket(int port, const std::string &name);
+  static Packet createPairingResponse(int sessionId, bool success,
+                                      const std::string &msg = "");
+  static Packet createHeartbeatPacket();
+  static Packet createTransferReadyPacket(long long offset);
+  static Packet createTransferCompletePacket(const std::string &fileHash);
+  static Packet createErrorPacket(const std::string &message);
 
-private:
-  static std::vector<std::string> split(const std::string &str, char delimiter);
-  static std::string trim(const std::string &str);
+  // JSON Helper
+  static json parsePayload(const Packet &packet);
+
+  // Helper to get raw bytes for network sending
+  static std::vector<char> pack(const Packet &packet) {
+    return serializePacket(packet);
+  }
 };

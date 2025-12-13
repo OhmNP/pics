@@ -1,11 +1,9 @@
 #include "UdpBroadcaster.h"
 #include "ConfigManager.h"
 #include "Logger.h"
-#include <boost/date_time/posix_time/posix_time.hpp>
+#include "ProtocolParser.h"
+#include <boost/bind/bind.hpp>
 #include <iostream>
-#include <nlohmann/json.hpp>
-
-using json = nlohmann::json;
 
 UdpBroadcaster::UdpBroadcaster(boost::asio::io_context &io_context, int port)
     : socket_(io_context, udp::endpoint(udp::v4(), 0)),
@@ -14,13 +12,12 @@ UdpBroadcaster::UdpBroadcaster(boost::asio::io_context &io_context, int port)
   socket_.set_option(udp::socket::reuse_address(true));
   socket_.set_option(boost::asio::socket_base::broadcast(true));
 
-  // Create JSON discovery message
-  json msg;
-  msg["service"] = "photosync";
-  msg["port"] = port;
-  msg["serverName"] =
-      ConfigManager::getInstance().getServerName(); // Add server name
-  message_ = msg.dump();
+  // Create Discovery Packet
+  std::string serverName = ConfigManager::getInstance().getServerName();
+  Packet packet = ProtocolParser::createDiscoveryPacket(port, serverName);
+
+  // Serialize once + cache
+  message_ = ProtocolParser::pack(packet);
 }
 
 void UdpBroadcaster::start() {

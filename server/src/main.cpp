@@ -74,9 +74,6 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  // Check storage integrity on startup
-  db.checkStorageIntegrity(config.getPhotosDir());
-
   // Setup signal handlers
   std::signal(SIGINT, signalHandler);
   std::signal(SIGTERM, signalHandler);

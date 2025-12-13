@@ -22,6 +22,6 @@ private:
   udp::socket socket_;
   udp::endpoint broadcastEndpoint_;
   boost::asio::deadline_timer timer_;
-  std::string message_;
+  std::vector<char> message_;
   int port_;
 };

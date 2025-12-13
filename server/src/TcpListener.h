@@ -6,19 +6,9 @@
 #include <boost/asio.hpp>
 #include <memory>
 #include <string>
+#include <vector>
 
 using boost::asio::ip::tcp;
-
-enum class SessionState {
-  AWAITING_HELLO,
-  AWAITING_BATCH_START,
-  AWAITING_PHOTO_METADATA,
-  AWAITING_DATA_COMMAND,       // NEW
-  RECEIVING_PHOTO_DATA,        // NEW
-  AWAITING_BATCH_CHECK_HASHES, // NEW
-  AWAITING_BATCH_END,
-  AWAITING_SESSION_END
-};
 
 class Session : public std::enable_shared_from_this<Session> {
 public:
@@ -26,31 +16,36 @@ public:
   void start();
 
 private:
-  void doRead();
-  void doReadBinaryData(long long dataSize); // NEW
-  void doWrite(const std::string &message);
-  void handleCommand(const std::string &message);
-  void handlePhotoData(const std::vector<char> &data); // NEW
+  void doReadHeader();
+  void doReadPayload(PacketHeader header);
+  void handlePacket(const Packet &packet);
+  void sendPacket(const Packet &packet);
+
+  // Command Handlers
+  void handleDiscovery(const json &payload);
+  void handlePairingRequest(const json &payload);
+  void handleMetadata(const json &payload);
+  void handleFileChunk(const std::vector<char> &data);
+  void handleTransferComplete(const json &payload);
 
   tcp::socket socket_;
   DatabaseManager &db_;
-  FileManager &fileManager_; // NEW
-  boost::asio::streambuf buffer_;
+  FileManager &fileManager_;
 
-  SessionState state_; // NEW
-  int clientId_;
-  int sessionId_;
-  int currentBatchSize_;
-  int photosInBatch_;
-  int totalPhotosReceived_;
+  // Buffers
+  std::vector<char> headerBuffer_;
+  std::vector<char> payloadBuffer_;
 
-  PhotoMetadata currentPhoto_;  // NEW
-  std::string currentTempPath_; // NEW
+  // State
+  int clientId_ = -1;
+  int sessionId_ = -1;
 
-  // Batch Check Reconciliation
-  int batchCheckCount_;
-  int batchCheckReceived_;
-  std::vector<std::string> currentBatchHashes_;
+  // Current Transfer State
+  std::string currentFileName_;
+  long long currentFileSize_ = 0;
+  long long currentFileReceived_ = 0;
+  std::string currentTempPath_;
+  std::string currentFileHash_;
 };
 
 class TcpListener {
@@ -63,5 +58,5 @@ private:
 
   tcp::acceptor acceptor_;
   DatabaseManager &db_;
-  FileManager &fileManager_; // NEW
+  FileManager &fileManager_;
 };

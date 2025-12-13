@@ -79,14 +79,6 @@ public:
   std::vector<ClientRecord> getClients();
   ClientRecord getClientDetails(int clientId);
 
-  struct StorageStats {
-    long long totalStorageUsed;
-    int totalFiles;
-    std::map<int, long long> clientStorage;
-    std::map<std::string, long long> mimeTypeStorage;
-  };
-  StorageStats getStorageStats();
-
   // Session operations
   int createSession(int clientId);
   void updateSessionPhotosReceived(int sessionId, int photosReceived);
@@ -124,9 +116,6 @@ public:
   // Migration operations
   bool migratePhotosToMetadata();
 
-  // Integrity Check
-  void checkStorageIntegrity(const std::string &storagePath);
-
   // Authentication operations
   bool createAdminUser(const std::string &username,
                        const std::string &passwordHash);
@@ -154,45 +143,6 @@ public:
   bool validatePairingToken(const std::string &token);
   bool markPairingTokenUsed(const std::string &token);
   int cleanupExpiredPairingTokens();
-
-  struct LogEntry {
-    int id;
-    std::string level;
-    std::string message;
-    std::string timestamp;
-    std::string context;
-    bool read;
-  };
-
-  // Log operations
-  bool createLog(const std::string &level, const std::string &message,
-                 const std::string &context = "");
-  std::vector<LogEntry> getLogs(int limit = 50, int offset = 0,
-                                const std::string &level = "",
-                                bool onlyUnread = false);
-  int getUnreadLogCount();
-  bool markLogAsRead(int logId);
-  bool markAllLogsAsRead();
-  int cleanupOldLogs(int daysToKeep);
-
-  struct AuditLogEntry {
-    int id;
-    int userId;
-    std::string username;
-    std::string action;
-    std::string targetType;
-    std::string targetId;
-    std::string details;
-    std::string timestamp;
-    std::string ipAddress;
-  };
-
-  // Audit Log operations
-  bool logActivity(int userId, const std::string &action,
-                   const std::string &targetType, const std::string &targetId,
-                   const std::string &details, const std::string &ipAddress);
-  std::vector<AuditLogEntry> getAuditLogs(int limit = 50, int offset = 0);
-  int getAuditLogCount();
 
 private:
   sqlite3 *db_;
