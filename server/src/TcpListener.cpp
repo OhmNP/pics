@@ -139,8 +139,16 @@ void Session::handlePairingRequest(const json &payload) {
   }
 
   if (authorized) {
+    // Create or get client
+    clientId_ = db_.getOrCreateClient(deviceId);
+    if (clientId_ == -1) {
+      sendPacket(ProtocolParser::createPairingResponse(
+          -1, false, "Failed to create client"));
+      return;
+    }
+
     // Create session
-    int newSessionId = db_.createSession(1); // 1 = default client for now
+    int newSessionId = db_.createSession(clientId_);
     if (newSessionId > 0) {
       sessionId_ = newSessionId;
       sendPacket(
@@ -206,7 +214,8 @@ void Session::handleTransferComplete(const json &payload) {
 
   std::string finalPath;
   if (fileManager_.finalizeUpload(currentTempPath_, meta, finalPath)) {
-    db_.insertPhoto(1, meta, finalPath); // 1 = default client
+    db_.insertPhoto(clientId_, meta, finalPath);
+    db_.updateClientLastSeen(clientId_);
     sendPacket(ProtocolParser::createTransferCompletePacket(currentFileHash_));
     LOG_INFO("Photo saved: " + finalPath);
   } else {

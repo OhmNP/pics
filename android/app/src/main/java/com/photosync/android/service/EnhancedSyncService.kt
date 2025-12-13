@@ -103,6 +103,10 @@ class EnhancedSyncService : Service() {
         startMonitoring()
         
         if (syncJob?.isActive == true) {
+            if (_syncState.value is SyncState.Paused) {
+                resumeSync()
+                return
+            }
             Log.w(TAG, "Sync already in progress")
             return
         }
@@ -210,89 +214,108 @@ class EnhancedSyncService : Service() {
             return
         }
         
-        // 2. Connect to server
+        // 2. Initial connection check (optional, but good for quick fail)
         _syncState.value = SyncState.Connecting
         updateNotification("Connecting to server...")
         
-        val client = TcpSyncClient(serverIp)
-        if (!client.connect()) {
-            _syncState.value = SyncState.Error("Failed to connect to server")
+        // 3. Get all media items
+        val mediaItems = mediaRepository.getAllMediaItems()
+        if (mediaItems.isEmpty()) {
+            _syncState.value = SyncState.Idle
             return
         }
         
-        try {
-            // 3. Start session
-            val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-            val sessionId = client.startSession(deviceId)
-            if (sessionId == null) {
-                _syncState.value = SyncState.Error("Failed to start session")
-                return
-            }
-            
-            Log.d(TAG, "Session started: $sessionId")
-            
-            // 4. Get all media items
-            _syncState.value = SyncState.Syncing
-            val mediaItems = mediaRepository.getAllMediaItems()
-            _syncProgress.value = SyncProgress(totalFiles = mediaItems.size, isActive = true)
-            
-            // 5. Sync each item
-            var bytesTransferred = 0L
-            mediaItems.forEachIndexed { index, item ->
-                // Check if paused
-                while (_syncState.value is SyncState.Paused) {
-                    delay(1000)
-                }
-                
-                _syncProgress.value = _syncProgress.value.copy(
-                    currentFile = item.name,
-                    currentFileIndex = index + 1
-                )
-                updateNotification("Syncing ${index + 1}/${mediaItems.size}: ${item.name}")
-                
-                // Calculate hash if not already done
-                val hash = if (item.hash.isEmpty()) {
-                    mediaRepository.calculateHash(item.uri)
-                } else {
-                    item.hash
-                }
-                
-                // Update status to syncing
-                mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.SYNCING)
-                
-                // Send metadata
-                val needsUpload = client.sendPhotoMetadata(item.name, item.size, hash)
-                
-                if (needsUpload) {
-                    // Read file data
-                    val data = contentResolver.openInputStream(item.uri)?.readBytes()
-                    if (data != null) {
-                        val success = client.sendPhotoData(data)
-                        if (success) {
-                            bytesTransferred += data.size
-                            mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.SYNCED)
-                        } else {
-                            mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.ERROR)
+        _syncState.value = SyncState.Syncing
+        _syncProgress.value = SyncProgress(totalFiles = mediaItems.size, isActive = true)
+        
+        // Parallel Sync Configuration
+        val workerCount = 4
+        val itemChannel = kotlinx.coroutines.channels.Channel<com.photosync.android.model.MediaItem>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        
+        // Load items into channel
+        mediaItems.forEach { itemChannel.trySend(it) }
+        itemChannel.close() // Signal no more items
+        
+        val completedCount = java.util.concurrent.atomic.AtomicInteger(0)
+        val totalBytesTransferred = java.util.concurrent.atomic.AtomicLong(0)
+        
+        val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+        
+        // Launch workers
+        coroutineScope {
+            val jobs = List(workerCount) { workerId ->
+                launch(Dispatchers.IO) {
+                    val client = TcpSyncClient(serverIp)
+                    try {
+                        if (!client.connect()) {
+                            Log.w(TAG, "Worker $workerId failed to connect")
+                            return@launch
                         }
+                        
+                        val sessionId = client.startSession(deviceId)
+                        if (sessionId == null) {
+                            Log.w(TAG, "Worker $workerId failed to start session")
+                            return@launch
+                        }
+                        
+                        for (item in itemChannel) {
+                            // Check if paused
+                            while (_syncState.value is SyncState.Paused) {
+                                delay(1000)
+                            }
+                            
+                            // Calculate hash
+                            val hash = if (item.hash.isEmpty()) {
+                                mediaRepository.calculateHash(item.uri)
+                            } else {
+                                item.hash
+                            }
+                            
+                            // Update status
+                            mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.SYNCING)
+                            
+                            val index = completedCount.get() + 1
+                            updateNotification("Syncing... ($index/${mediaItems.size})")
+                             _syncProgress.value = _syncProgress.value.copy(
+                                currentFile = item.name, // Just show last started
+                                currentFileIndex = index
+                            )
+                            
+                            // Send metadata
+                            val needsUpload = client.sendPhotoMetadata(item.name, item.size, hash)
+                            
+                            if (needsUpload) {
+                                val data = contentResolver.openInputStream(item.uri)?.readBytes()
+                                if (data != null) {
+                                    if (client.sendPhotoData(data)) {
+                                        totalBytesTransferred.addAndGet(data.size.toLong())
+                                        mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.SYNCED)
+                                    } else {
+                                        mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.ERROR)
+                                    }
+                                }
+                            } else {
+                                mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.SYNCED)
+                            }
+                            
+                            completedCount.incrementAndGet()
+                            _syncProgress.value = _syncProgress.value.copy(bytesTransferred = totalBytesTransferred.get())
+                        }
+                        
+                        client.endSession()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Worker $workerId error", e)
+                    } finally {
+                        client.disconnect()
                     }
-                } else {
-                    // Already exists on server
-                    mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.SYNCED)
                 }
-                
-                _syncProgress.value = _syncProgress.value.copy(bytesTransferred = bytesTransferred)
             }
-            
-            // 6. End session
-            client.endSession()
-            
-            _syncState.value = SyncState.Idle
-            updateNotification("Sync completed: ${mediaItems.size} files")
-            
-        } finally {
-            client.disconnect()
-            _syncProgress.value = _syncProgress.value.copy(isActive = false)
+            jobs.joinAll()
         }
+        
+        _syncState.value = SyncState.Idle
+        updateNotification("Sync completed: ${completedCount.get()} files")
+        _syncProgress.value = _syncProgress.value.copy(isActive = false)
     }
     
     private suspend fun performReconciliation() {

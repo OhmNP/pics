@@ -157,7 +157,14 @@ fun SyncStatusScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable {
-                        if (isSyncing) viewModel.pauseSync() else viewModel.startSync()
+                        when (syncState) {
+                            is EnhancedSyncService.SyncState.Syncing,
+                            is EnhancedSyncService.SyncState.Connecting,
+                            is EnhancedSyncService.SyncState.Discovering,
+                            is EnhancedSyncService.SyncState.Reconciling -> viewModel.pauseSync()
+                            is EnhancedSyncService.SyncState.Paused -> viewModel.resumeSync() // Use resumeSync explicitly
+                            else -> viewModel.startSync()
+                        }
                     }
             ) {
                  Row(
@@ -167,14 +174,31 @@ fun SyncStatusScreen(
                      horizontalArrangement = Arrangement.Center,
                      verticalAlignment = Alignment.CenterVertically
                  ) {
+                     val buttonIcon = when(syncState) {
+                        is EnhancedSyncService.SyncState.Syncing,
+                        is EnhancedSyncService.SyncState.Connecting,
+                        is EnhancedSyncService.SyncState.Discovering,
+                        is EnhancedSyncService.SyncState.Reconciling -> Icons.Rounded.Pause
+                        else -> Icons.Rounded.PlayArrow
+                     }
+                     
+                     val buttonText = when(syncState) {
+                        is EnhancedSyncService.SyncState.Syncing,
+                        is EnhancedSyncService.SyncState.Connecting,
+                        is EnhancedSyncService.SyncState.Discovering,
+                        is EnhancedSyncService.SyncState.Reconciling -> "Pause Sync"
+                        is EnhancedSyncService.SyncState.Paused -> "Resume Sync"
+                        else -> "Start Sync"
+                     }
+                     
                      Icon(
-                         imageVector = if (isSyncing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                         imageVector = buttonIcon,
                          contentDescription = null,
                          tint = Primary
                      )
                      Spacer(modifier = Modifier.width(12.dp))
                      Text(
-                         text = if (isSyncing) "Pause Sync" else "Resume Sync",
+                         text = buttonText,
                          style = MaterialTheme.typography.titleMedium,
                          color = TextPrimary
                      )

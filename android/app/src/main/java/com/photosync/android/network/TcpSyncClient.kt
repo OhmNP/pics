@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.InetSocketAddress
@@ -41,10 +43,12 @@ class TcpSyncClient(
             Log.d(TAG, "Connecting to $serverIp:$serverPort")
             
             socket = Socket()
+            socket?.tcpNoDelay = true
             socket?.connect(InetSocketAddress(serverIp, serverPort), CONNECT_TIMEOUT_MS)
             
-            inputStream = DataInputStream(socket!!.getInputStream())
-            outputStream = DataOutputStream(socket!!.getOutputStream())
+            val bufferSize = 1024 * 1024 // 1MB buffer
+            inputStream = DataInputStream(BufferedInputStream(socket!!.getInputStream(), bufferSize))
+            outputStream = DataOutputStream(BufferedOutputStream(socket!!.getOutputStream(), bufferSize))
             
             _connectionStatus.value = ConnectionStatus.Connected
             Log.i(TAG, "Connected to server")
@@ -77,8 +81,8 @@ class TcpSyncClient(
     // Send a packet and wait for a response packet
     private suspend fun sendRequest(packet: NetworkPacket): NetworkPacket? = withContext(Dispatchers.IO) {
         try {
-            val out = outputStream ?: return@withContext null
-            val `in` = inputStream ?: return@withContext null
+            val out = outputStream ?: throw java.io.IOException("Not connected")
+            val `in` = inputStream ?: throw java.io.IOException("Not connected")
             
             // Write packet
             val bytes = packet.toBytes()
@@ -107,7 +111,7 @@ class TcpSyncClient(
         } catch (e: Exception) {
             Log.e(TAG, "Error in sendRequest: ${e.message}")
             disconnect()
-            null
+            throw e // Rethrow to let caller handle or crash
         }
     }
 
@@ -167,65 +171,56 @@ class TcpSyncClient(
     }
     
     suspend fun sendPhotoMetadata(filename: String, size: Long, hash: String): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val json = JSONObject()
-            json.put("filename", filename)
-            json.put("size", size)
-            json.put("hash", hash)
-            
-            val packet = NetworkPacket.create(PacketType.METADATA, json)
-            val response = sendRequest(packet)
-            
-            // Expect TRANSFER_READY (or sometimes just Ack/Error)
-            if (response != null && response.header.type == PacketType.TRANSFER_READY) {
-                return@withContext true
-            }
-            // If file already exists, server might send different response? 
-            // Reuse logic: if server has file, it might say "skip" or handle via batch check.
-            // But assume here we only send if batchCheck said we need to.
-            false
-        } catch (e: Exception) {
-            Log.e(TAG, "Error sending metadata: ${e.message}")
-            false
+        // Do NOT catch exceptions here, let them propagate to stop sync loop on error
+        val json = JSONObject()
+        json.put("filename", filename)
+        json.put("size", size)
+        json.put("hash", hash)
+        
+        val packet = NetworkPacket.create(PacketType.METADATA, json)
+        val response = sendRequest(packet)
+        
+        // Expect TRANSFER_READY to proceed with upload
+        if (response != null && response.header.type == PacketType.TRANSFER_READY) {
+            return@withContext true
         }
+        // Any other response (like ACK or SKIP if implemented) means we don't upload
+        false
     }
     
     suspend fun sendPhotoData(data: ByteArray): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val chunkSize = 4096 // 4KB chunks
-            var offset = 0
+        // Do NOT catch exceptions here
+        val chunkSize = 1024 * 1024 // 1MB chunks
+        var offset = 0
+        
+        val out = outputStream ?: throw java.io.IOException("Not connected")
+        
+        while (offset < data.size) {
+            val end = Math.min(offset + chunkSize, data.size)
+            val chunk = data.copyOfRange(offset, end)
             
-            while (offset < data.size) {
-                val end = Math.min(offset + chunkSize, data.size)
-                val chunk = data.copyOfRange(offset, end)
-                
-                // Send FILE_CHUNK
-                // In binary protocol, payload IS the chunk bytes.
-                val packet = NetworkPacket.createBinary(PacketType.FILE_CHUNK, chunk)
-                val out = outputStream ?: return@withContext false
-                out.write(packet.toBytes())
-                out.flush()
-                // No ACK per chunk for speed
-                
-                offset += chunkSize
-                _syncProgress.value = _syncProgress.value.copy(bytesTransferred = _syncProgress.value.bytesTransferred + chunk.size)
-            }
+            // Send FILE_CHUNK
+            // In binary protocol, payload IS the chunk bytes.
+            val packet = NetworkPacket.createBinary(PacketType.FILE_CHUNK, chunk)
+            val out = outputStream ?: throw java.io.IOException("Not connected")
+            out.write(packet.toBytes())
+            out.flush()
+            // No ACK per chunk for speed
             
-            // Send TRANSFER_COMPLETE for this file?
-            // EnhancedSyncService seems to rely on this method completing the file transfer.
-            // TcpListener expects TRANSFER_COMPLETE packet.
-            
-            val json = JSONObject()
-            json.put("status", "completed") // Payload can be empty or status
-            val completePacket = NetworkPacket.create(PacketType.TRANSFER_COMPLETE, json)
-            val response = sendRequest(completePacket)
-            
-            return@withContext (response != null && response.header.type == PacketType.TRANSFER_COMPLETE)
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Error sending photo data: ${e.message}")
-            false
+            offset += chunkSize
+            _syncProgress.value = _syncProgress.value.copy(bytesTransferred = _syncProgress.value.bytesTransferred + chunk.size)
         }
+        
+        // Send TRANSFER_COMPLETE for this file?
+        // EnhancedSyncService seems to rely on this method completing the file transfer.
+        // TcpListener expects TRANSFER_COMPLETE packet.
+        
+        val json = JSONObject()
+        json.put("status", "completed") // Payload can be empty or status
+        val completePacket = NetworkPacket.create(PacketType.TRANSFER_COMPLETE, json)
+        val response = sendRequest(completePacket)
+        
+        return@withContext (response != null && response.header.type == PacketType.TRANSFER_COMPLETE)
     }
     
     suspend fun endSession(): Boolean = withContext(Dispatchers.IO) {
