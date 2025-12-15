@@ -43,42 +43,45 @@ class PairingViewModel(application: Application) : AndroidViewModel(application)
                 
                 // 1. Validate connection and token
                 val client = com.photosync.android.network.TcpSyncClient(serverIp)
-                if (!client.connect()) {
-                    _pairingState.value = PairingState.Error("Could not connect to server")
-                    return@launch
+                try {
+                    if (!client.connect()) {
+                        _pairingState.value = PairingState.Error("Could not connect to server")
+                        return@launch
+                    }
+                    
+                    val deviceId = Settings.Secure.getString(
+                        getApplication<Application>().contentResolver,
+                        Settings.Secure.ANDROID_ID
+                    )
+                    
+                    // 2. Try to start session with token
+                    val sessionId = client.startSession(deviceId, token)
+                    
+                    if (sessionId == null) {
+                        _pairingState.value = PairingState.Error("Authentication failed. Check pairing code.")
+                        return@launch
+                    }
+                    
+                    // 3. Save server configuration if successful
+                    val config = ServerConfigEntity(
+                        serverIp = serverIp,
+                        deviceId = deviceId,
+                        isPaired = true,
+                        lastConnected = System.currentTimeMillis()
+                    )
+                    
+                    withContext(Dispatchers.IO) {
+                        serverConfigDao.insertServerConfig(config)
+                    }
+                    
+                    // Update SettingsManager for SyncService
+                    settingsManager.serverIp = serverIp
+                    settingsManager.serverPort = 50505 // Default or discovered
+                    
+                    _pairingState.value = PairingState.Success
+                } finally {
+                    client.disconnect()
                 }
-                
-                val deviceId = Settings.Secure.getString(
-                    getApplication<Application>().contentResolver,
-                    Settings.Secure.ANDROID_ID
-                )
-                
-                // 2. Try to start session with token
-                val sessionId = client.startSession(deviceId, token)
-                client.disconnect()
-                
-                if (sessionId == null) {
-                    _pairingState.value = PairingState.Error("Authentication failed. Check pairing code.")
-                    return@launch
-                }
-                
-                // 3. Save server configuration if successful
-                val config = ServerConfigEntity(
-                    serverIp = serverIp,
-                    deviceId = deviceId,
-                    isPaired = true,
-                    lastConnected = System.currentTimeMillis()
-                )
-                
-                withContext(Dispatchers.IO) {
-                    serverConfigDao.insertServerConfig(config)
-                }
-                
-                // Update SettingsManager for SyncService
-                settingsManager.serverIp = serverIp
-                settingsManager.serverPort = 50505 // Default or discovered
-                
-                _pairingState.value = PairingState.Success
             } catch (e: Exception) {
                 _pairingState.value = PairingState.Error(e.message ?: "Pairing failed")
             }

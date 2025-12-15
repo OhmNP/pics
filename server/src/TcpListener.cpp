@@ -1,6 +1,7 @@
 #include "TcpListener.h"
 #include "AuthenticationManager.h"
 #include "ConfigManager.h"
+#include "ConnectionManager.h"
 #include "Logger.h"
 #include <boost/bind/bind.hpp>
 #include <iostream>
@@ -13,6 +14,12 @@ Session::Session(tcp::socket socket, DatabaseManager &db,
                  FileManager &fileManager)
     : socket_(std::move(socket)), db_(db), fileManager_(fileManager) {
   headerBuffer_.resize(8); // Fixed header size
+}
+
+Session::~Session() {
+  if (sessionId_ != -1) {
+    ConnectionManager::getInstance().removeConnection(sessionId_);
+  }
 }
 
 void Session::start() { doReadHeader(); }
@@ -70,9 +77,20 @@ void Session::handlePacket(const Packet &packet) {
 
   try {
     switch (packet.header.type) {
-    case PacketType::HEARTBEAT:
-      // Keep-alive, nothing to do
-      break;
+    case PacketType::HEARTBEAT: {
+      try {
+        std::string clientIp = socket_.remote_endpoint().address().to_string();
+        LOG_INFO("Heartbeat received from " + clientIp);
+        if (clientId_ != -1) {
+          db_.updateClientLastSeen(clientId_);
+        }
+        if (sessionId_ != -1) {
+          ConnectionManager::getInstance().updateActivity(sessionId_);
+        }
+      } catch (const std::exception &e) {
+        LOG_WARN("Heartbeat received (unknown source)");
+      }
+    } break;
     case PacketType::PAIRING_REQUEST:
       handlePairingRequest(ProtocolParser::parsePayload(packet));
       break;
@@ -154,6 +172,15 @@ void Session::handlePairingRequest(const json &payload) {
       sendPacket(
           ProtocolParser::createPairingResponse(sessionId_, true, "Connected"));
       LOG_INFO("Session started: " + std::to_string(sessionId_));
+
+      // Register with ConnectionManager
+      try {
+        ConnectionManager::getInstance().addConnection(
+            sessionId_, deviceId,
+            socket_.remote_endpoint().address().to_string());
+      } catch (...) {
+        // ignore endpoint error
+      }
     } else {
       sendPacket(
           ProtocolParser::createPairingResponse(-1, false, "Session Failed"));

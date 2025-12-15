@@ -13,6 +13,7 @@ using boost::asio::ip::tcp;
 class Session : public std::enable_shared_from_this<Session> {
 public:
   Session(tcp::socket socket, DatabaseManager &db, FileManager &fileManager);
+  ~Session();
   void start();
 
 private:

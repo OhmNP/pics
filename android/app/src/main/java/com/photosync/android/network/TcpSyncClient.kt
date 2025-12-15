@@ -10,6 +10,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -35,7 +37,10 @@ class TcpSyncClient(
     companion object {
         private const val TAG = "TcpSyncClient"
         private const val CONNECT_TIMEOUT_MS = 5000
+        private const val HEARTBEAT_INTERVAL_MS = 30000L
     }
+    
+    private var heartbeatJob: kotlinx.coroutines.Job? = null
 
     suspend fun connect(): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -52,6 +57,10 @@ class TcpSyncClient(
             
             _connectionStatus.value = ConnectionStatus.Connected
             Log.i(TAG, "Connected to server")
+            
+            // Start periodic heartbeat
+            startHeartbeatLoop()
+            
             true
         } catch (e: Exception) {
             Log.e(TAG, "Connection failed: ${e.message}")
@@ -63,6 +72,7 @@ class TcpSyncClient(
 
     fun disconnect() {
         try {
+            stopHeartbeatLoop()
             socket?.close()
         } catch (e: Exception) {
             Log.e(TAG, "Error closing socket", e)
@@ -76,6 +86,33 @@ class TcpSyncClient(
 
     suspend fun disconnectSuspend() = withContext(Dispatchers.IO) {
         disconnect()
+    }
+    
+    private fun startHeartbeatLoop() {
+        stopHeartbeatLoop()
+        heartbeatJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            while (isActive) {
+                sendHeartbeat()
+                delay(HEARTBEAT_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun stopHeartbeatLoop() {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+    }
+
+    private suspend fun sendHeartbeat() {
+        try {
+            val packet = NetworkPacket.create(PacketType.HEARTBEAT, null)
+            val out = outputStream ?: return
+            out.write(packet.toBytes())
+            out.flush()
+            Log.d(TAG, "Sent Heartbeat")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send heartbeat", e)
+        }
     }
     
     // Send a packet and wait for a response packet
@@ -253,4 +290,5 @@ class TcpSyncClient(
         } catch (e: Exception) {
             false
         }
-    }}
+    }
+}

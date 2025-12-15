@@ -123,6 +123,8 @@ class EnhancedSyncService : Service() {
         }
     }
     
+    private var monitoringClient: TcpSyncClient? = null
+
     private fun startMonitoring() {
         // Must call startForeground since we are using startForegroundService
         startForeground(NOTIFICATION_ID, createNotification("Monitoring server connection..."))
@@ -130,44 +132,59 @@ class EnhancedSyncService : Service() {
         if (monitoringJob?.isActive == true) return
         
         monitoringJob = serviceScope.launch {
+            val settingsManager = com.photosync.android.data.SettingsManager(this@EnhancedSyncService)
+            val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+            
             while (isActive) {
-                checkServerConnection()
-                delay(30_000) // Check every 30 seconds
+                try {
+                    val serverIp = settingsManager.serverIp
+                    if (serverIp.isBlank()) {
+                        _serverStatus.value = ServerConnectivityStatus.DISCONNECTED
+                        delay(5000)
+                        continue
+                    }
+
+                    if (monitoringClient == null) {
+                        monitoringClient = TcpSyncClient(serverIp)
+                    }
+
+                    _serverStatus.value = ServerConnectivityStatus.CONNECTING
+                    val connected = monitoringClient!!.connect()
+
+                    if (connected) {
+                        // Start Session to register with ConnectionManager
+                        val sessionId = monitoringClient!!.startSession(deviceId)
+
+                        if (sessionId != null) {
+                            _serverStatus.value = ServerConnectivityStatus.CONNECTED
+                            Log.i(TAG, "Connected to server with session ID: $sessionId")
+                            
+                            // Keep monitoring until disconnected
+                            monitoringClient!!.connectionStatus.collect { status ->
+                                if (status is com.photosync.android.model.ConnectionStatus.Disconnected || 
+                                    status is com.photosync.android.model.ConnectionStatus.Error) {
+                                    throw Exception("Disconnected") // Break inner loop to retry
+                                }
+                            }
+                        } else {
+                            Log.w(TAG, "Failed to start session")
+                            monitoringClient!!.disconnect()
+                            _serverStatus.value = ServerConnectivityStatus.DISCONNECTED // or ERROR
+                            delay(5000) // Wait before retry
+                        }
+                    } else {
+                         _serverStatus.value = ServerConnectivityStatus.DISCONNECTED
+                         delay(5000)
+                    }
+
+                } catch (e: Exception) {
+                    Log.e(TAG, "Connection monitor error: ${e.message}")
+                    _serverStatus.value = ServerConnectivityStatus.DISCONNECTED
+                    monitoringClient?.disconnect()
+                    monitoringClient = null
+                    delay(5000)
+                }
             }
-        }
-    }
-    
-    private suspend fun checkServerConnection() {
-        try {
-            val settingsManager = com.photosync.android.data.SettingsManager(this)
-            val serverIp = settingsManager.serverIp
-            
-            if (serverIp.isBlank()) {
-                _serverStatus.value = ServerConnectivityStatus.DISCONNECTED
-                return
-            }
-            
-            _serverStatus.value = ServerConnectivityStatus.CONNECTING
-            
-            val client = TcpSyncClient(serverIp)
-            val isConnected = client.connect()
-            
-            if (isConnected) {
-                // Send weak ping or just connect check
-                // Ideally we should send a ping packet, but connect + disconnect is a basic check for now
-                // Or better, reuse client.connect() result.
-                _serverStatus.value = ServerConnectivityStatus.CONNECTED
-                client.disconnect()
-            } else {
-                 _serverStatus.value = ServerConnectivityStatus.DISCONNECTED
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Server connection check failed: ${e.message}")
-            _serverStatus.value = ServerConnectivityStatus.ERROR
-        } catch (e: Throwable) {
-            // Catch service specific exceptions or other runtime errors
-            Log.e(TAG, "Fatal error checking server connection: ${e.message}")
-             _serverStatus.value = ServerConnectivityStatus.ERROR
         }
     }
     
@@ -402,9 +419,20 @@ class EnhancedSyncService : Service() {
         notificationManager.notify(NOTIFICATION_ID, notification)
     }
     
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.i(TAG, "Task removed, stopping service")
+        stopSelf()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         instance = null
+        try {
+            monitoringClient?.disconnect()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error disconnecting in onDestroy", e)
+        }
         serviceScope.cancel()
     }
 }
