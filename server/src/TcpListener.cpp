@@ -14,11 +14,22 @@ Session::Session(tcp::socket socket, DatabaseManager &db,
                  FileManager &fileManager)
     : socket_(std::move(socket)), db_(db), fileManager_(fileManager) {
   headerBuffer_.resize(8); // Fixed header size
+  try {
+    std::string clientIp = socket_.remote_endpoint().address().to_string();
+    LOG_INFO("Client connected from " + clientIp);
+  } catch (...) {
+    LOG_INFO("Client connected (unknown IP)");
+  }
 }
 
 Session::~Session() {
   if (sessionId_ != -1) {
     ConnectionManager::getInstance().removeConnection(sessionId_);
+    LOG_INFO("Client disconnected (Session: " + std::to_string(sessionId_) +
+             ")");
+  } else {
+    // Session wasn't fully established or authentication failed
+    LOG_INFO("Client disconnected (No Session ID)");
   }
 }
 
@@ -214,6 +225,7 @@ void Session::handleMetadata(const json &payload) {
 
   if (fileManager_.startUpload(meta, currentTempPath_)) {
     sendPacket(ProtocolParser::createTransferReadyPacket(0));
+    ConnectionManager::getInstance().updateStatus(sessionId_, "syncing");
   } else {
     sendPacket(ProtocolParser::createErrorPacket("Failed to prepare upload"));
   }
@@ -225,6 +237,9 @@ void Session::handleFileChunk(const std::vector<char> &data) {
 
   if (fileManager_.writeChunk(currentTempPath_, data, currentFileReceived_)) {
     currentFileReceived_ += data.size();
+    sessionBytes_ += data.size();
+    ConnectionManager::getInstance().updateProgress(sessionId_, sessionPhotos_,
+                                                    sessionBytes_);
     // Ack? No, usually stream optimization.
   } else {
     LOG_ERROR("Write failed for " + currentTempPath_);
@@ -244,6 +259,12 @@ void Session::handleTransferComplete(const json &payload) {
     db_.insertPhoto(clientId_, meta, finalPath);
     db_.updateClientLastSeen(clientId_);
     sendPacket(ProtocolParser::createTransferCompletePacket(currentFileHash_));
+
+    sessionPhotos_++;
+    ConnectionManager::getInstance().updateProgress(sessionId_, sessionPhotos_,
+                                                    sessionBytes_);
+    ConnectionManager::getInstance().updateStatus(sessionId_, "idle");
+
     LOG_INFO("Photo saved: " + finalPath);
   } else {
     sendPacket(ProtocolParser::createErrorPacket("Finalization failed"));

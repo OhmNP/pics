@@ -412,6 +412,9 @@ void ApiServer::setupRoutes() {
 std::string ApiServer::handleGetStats() {
   try {
     // Get statistics from database
+    auto &connMgr = ConnectionManager::getInstance();
+    connMgr.cleanStaleConnections(45);
+
     int totalPhotos = db_.getTotalPhotoCount();
     int totalClients = db_.getTotalClientCount();
     int completedSessions = db_.getCompletedSessionCount();
@@ -457,6 +460,15 @@ std::string ApiServer::handleGetClients() {
   try {
     auto clients = db_.getClients();
     auto &connMgr = ConnectionManager::getInstance();
+
+    // Clean up stale connections (no heartbeat for 45 seconds)
+    auto removed = connMgr.cleanStaleConnections(45);
+    if (!removed.empty()) {
+      for (int sid : removed) {
+        LOG_INFO("Removed stale connection: " + std::to_string(sid));
+      }
+    }
+
     auto activeConnections = connMgr.getActiveConnections();
 
     json clientsJson = json::array();
@@ -528,6 +540,7 @@ std::string ApiServer::handleGetSessions(int page, int limit,
 std::string ApiServer::handleGetConnections() {
   try {
     auto &connMgr = ConnectionManager::getInstance();
+    connMgr.cleanStaleConnections(45);
     auto connections = connMgr.getActiveConnections();
 
     json activeConnections = json::array();

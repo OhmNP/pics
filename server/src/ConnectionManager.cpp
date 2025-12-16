@@ -65,3 +65,21 @@ int ConnectionManager::getActiveCount() {
   std::lock_guard<std::mutex> lock(mutex_);
   return static_cast<int>(connections_.size());
 }
+
+std::vector<int> ConnectionManager::cleanStaleConnections(int timeoutSeconds) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<int> removedSessions;
+  auto now = std::chrono::system_clock::now();
+
+  for (auto it = connections_.begin(); it != connections_.end();) {
+    auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+        now - it->second.lastActivity);
+    if (duration.count() > timeoutSeconds) {
+      removedSessions.push_back(it->first);
+      it = connections_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  return removedSessions;
+}

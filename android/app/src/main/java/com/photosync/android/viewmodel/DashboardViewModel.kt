@@ -8,6 +8,8 @@ import com.photosync.android.data.AppDatabase
 import com.photosync.android.model.SyncProgress
 import com.photosync.android.repository.MediaRepository
 import com.photosync.android.service.EnhancedSyncService
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,25 +20,56 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     private val mediaRepository: MediaRepository
     private val database: AppDatabase
     
-    // Fallback if service is not running
-    private val _localState = MutableStateFlow<EnhancedSyncService.SyncState>(EnhancedSyncService.SyncState.Idle)
-    private val _localProgress = MutableStateFlow(SyncProgress())
-    private val _localServerStatus = MutableStateFlow(EnhancedSyncService.ServerConnectivityStatus.DISCONNECTED)
+    // Local state that reflects the service state + fallback
+    private val _syncState = MutableStateFlow<EnhancedSyncService.SyncState>(EnhancedSyncService.SyncState.Idle)
+    val syncState: StateFlow<EnhancedSyncService.SyncState> = _syncState.asStateFlow()
+
+    private val _syncProgress = MutableStateFlow(SyncProgress())
+    val syncProgress: StateFlow<SyncProgress> = _syncProgress.asStateFlow()
+
+    private val _serverStatus = MutableStateFlow(EnhancedSyncService.ServerConnectivityStatus.DISCONNECTED)
+    val serverStatus: StateFlow<EnhancedSyncService.ServerConnectivityStatus> = _serverStatus.asStateFlow()
     
+    private var serviceMonitoringJob: Job? = null
+
     init {
         database = AppDatabase.getDatabase(application)
         mediaRepository = MediaRepository(application.contentResolver, database)
+        monitorServiceState()
     }
     
-    // Proxy service state/progress or return local fallback
-    val syncState: StateFlow<EnhancedSyncService.SyncState>
-        get() = EnhancedSyncService.getInstance()?.syncState ?: _localState.asStateFlow()
-        
-    val syncProgress: StateFlow<SyncProgress>
-        get() = EnhancedSyncService.getInstance()?.syncProgress ?: _localProgress.asStateFlow()
+    private fun monitorServiceState() {
+        viewModelScope.launch {
+            var currentService: EnhancedSyncService? = null
+            var collectionJob: Job? = null
+            
+            while (true) {
+                val service = EnhancedSyncService.getInstance()
+                
+                if (service != null && service !== currentService) {
+                    // Service instance changed or first found
+                    currentService = service
+                    collectionJob?.cancel()
+                    
+                    collectionJob = launch {
+                        launch { service.syncState.collect { _syncState.value = it } }
+                        launch { service.syncProgress.collect { _syncProgress.value = it } }
+                        launch { service.serverStatus.collect { _serverStatus.value = it } }
+                    }
+                } else if (service == null) {
+                    currentService = null
+                    collectionJob?.cancel()
+                    collectionJob = null
+                    // Optional: reset to default states if service dies?
+                    // _serverStatus.value = EnhancedSyncService.ServerConnectivityStatus.DISCONNECTED
+                }
+                
+                delay(1000)
+            }
+        }
+    }
     
-    val serverStatus: StateFlow<EnhancedSyncService.ServerConnectivityStatus>
-        get() = EnhancedSyncService.getInstance()?.serverStatus ?: _localServerStatus.asStateFlow()
+
     
     val syncedCount = mediaRepository.getSyncedCount()
     val pendingCount = mediaRepository.getPendingCount()

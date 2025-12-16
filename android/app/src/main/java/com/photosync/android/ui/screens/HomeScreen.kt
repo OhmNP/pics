@@ -87,7 +87,7 @@ fun HomeScreen(
             HeaderSection()
 
             // --- Main Status Card (Visualizer) ---
-            SyncStatusVisualizerCard(state = syncState)
+            SyncStatusVisualizerCard(state = syncState, progress = syncProgress)
 
             // --- Stats Grid ---
             Row(
@@ -201,7 +201,7 @@ private fun HeaderSection() {
 }
 
 @Composable
-private fun SyncStatusVisualizerCard(state: EnhancedSyncService.SyncState) {
+private fun SyncStatusVisualizerCard(state: EnhancedSyncService.SyncState, progress: com.photosync.android.model.SyncProgress) {
     val isSyncing = state is EnhancedSyncService.SyncState.Syncing
     val isConnecting = state is EnhancedSyncService.SyncState.Connecting || state is EnhancedSyncService.SyncState.Discovering
     
@@ -265,7 +265,7 @@ private fun SyncStatusVisualizerCard(state: EnhancedSyncService.SyncState) {
                     // Indicator
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth(if (isSyncing) 0.83f else 0.05f) // Mock progress
+                            .fillMaxWidth(if (isSyncing) progress.progressPercentage / 100f else 0.05f) 
                             .fillMaxHeight()
                             .background(
                                 Brush.horizontalGradient(
@@ -278,7 +278,7 @@ private fun SyncStatusVisualizerCard(state: EnhancedSyncService.SyncState) {
                     if (isSyncing) {
                          Box(
                             modifier = Modifier
-                                .fillMaxWidth(0.83f)
+                                .fillMaxWidth(progress.progressPercentage / 100f)
                                 .fillMaxHeight()
                                 .blur(8.dp)
                                 .background(statusColor, CircleShape)
@@ -288,7 +288,7 @@ private fun SyncStatusVisualizerCard(state: EnhancedSyncService.SyncState) {
 
                 // Percentage / Detail Text
                 Text(
-                    text = if (isSyncing) "83%" else if (state is EnhancedSyncService.SyncState.Error) "Retrying..." else "Waiting...",
+                    text = if (isSyncing) "${progress.progressPercentage.toInt()}%" else if (state is EnhancedSyncService.SyncState.Error) "Retrying..." else "Waiting...",
                     style = MaterialTheme.typography.labelLarge,
                     color = TextSecondary.copy(alpha = 0.8f),
                     fontWeight = FontWeight.Medium

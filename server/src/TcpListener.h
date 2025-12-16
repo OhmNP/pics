@@ -47,6 +47,10 @@ private:
   long long currentFileReceived_ = 0;
   std::string currentTempPath_;
   std::string currentFileHash_;
+
+  // Session Stats
+  int sessionPhotos_ = 0;
+  long long sessionBytes_ = 0;
 };
 
 class TcpListener {

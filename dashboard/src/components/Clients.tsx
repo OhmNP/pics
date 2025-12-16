@@ -43,7 +43,6 @@ function formatTimeAgo(dateString: string): string {
 
 export default function Clients() {
     const navigate = useNavigate();
-    const [connectedClients, setConnectedClients] = useState<Client[]>([]);
     const [allClients, setAllClients] = useState<Client[]>([]);
     const [loading, setLoading] = useState(true);
     const [pairingOpen, setPairingOpen] = useState(false);
@@ -54,9 +53,6 @@ export default function Clients() {
                 const response = await api.getClients();
                 const clients = response.data.clients;
 
-                const connected = clients.filter((c: Client) => c.isOnline);
-
-                setConnectedClients(connected);
                 setAllClients(clients);
             } catch (err) {
                 console.error('Error fetching clients:', err);
@@ -82,7 +78,6 @@ export default function Clients() {
                 // Refresh list
                 const newAll = allClients.filter(c => c.id !== id);
                 setAllClients(newAll);
-                setConnectedClients(newAll.filter(c => c.isOnline));
             } catch (err) {
                 console.error('Failed to delete client:', err);
                 alert('Failed to remove client');
@@ -91,7 +86,16 @@ export default function Clients() {
     };
 
     const ClientCard = ({ client }: { client: Client }) => (
-        <Card sx={{ mb: 2, cursor: 'pointer' }} onClick={() => navigate(`/clients/${client.id}`)}>
+        <Card
+            sx={{
+                mb: 2,
+                cursor: 'pointer',
+                boxShadow: client.isOnline ? '0 0 20px rgba(16, 185, 129, 0.3)' : undefined,
+                transition: 'box-shadow 0.3s ease-in-out',
+                border: client.isOnline ? '1px solid rgba(16, 185, 129, 0.2)' : undefined
+            }}
+            onClick={() => navigate(`/clients/${client.id}`)}
+        >
             <CardContent>
                 <Box display="flex" alignItems="flex-start" justifyContent="space-between">
                     <Box display="flex" gap={2} flex={1}>
@@ -100,13 +104,13 @@ export default function Clients() {
                                 width: 48,
                                 height: 48,
                                 borderRadius: 2,
-                                backgroundColor: 'rgba(0, 217, 255, 0.1)',
+                                backgroundColor: client.isOnline ? 'rgba(16, 185, 129, 0.1)' : 'rgba(0, 0, 0, 0.05)',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
                             }}
                         >
-                            <PhoneAndroidIcon sx={{ color: '#00d9ff' }} />
+                            <PhoneAndroidIcon sx={{ color: client.isOnline ? '#10b981' : 'text.secondary' }} />
                         </Box>
 
                         <Box flex={1}>
@@ -179,7 +183,7 @@ export default function Clients() {
         <Box p={3}>
             <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
                 <Typography variant="h4" fontWeight="bold">
-                    Clients
+                    Devices
                 </Typography>
                 <Button
                     variant="contained"
@@ -190,31 +194,26 @@ export default function Clients() {
                 </Button>
             </Box>
 
-            {/* Connected Clients */}
-            <Box mb={4}>
-                <Typography variant="h6" gutterBottom>
-                    Connected Now ({connectedClients.length})
-                </Typography>
-                {connectedClients.map((client) => (
-                    <ClientCard key={client.id} client={client} />
+            <Grid container spacing={2}>
+                {allClients.map((client) => (
+                    <Grid item xs={12} key={client.id}>
+                        <ClientCard client={client} />
+                    </Grid>
                 ))}
-            </Box>
-
-            <Divider sx={{ my: 3 }} />
-
-            {/* All Clients */}
-            <Box>
-                <Typography variant="h6" gutterBottom>
-                    All Clients ({allClients.length})
-                </Typography>
-                <Grid container spacing={2}>
-                    {allClients.map((client) => (
-                        <Grid item xs={12} key={client.id}>
-                            <ClientCard client={client} />
-                        </Grid>
-                    ))}
-                </Grid>
-            </Box>
+                {allClients.length === 0 && !loading && (
+                    <Grid item xs={12}>
+                        <Box sx={{ textAlign: 'center', py: 8, opacity: 0.6 }}>
+                            <PhoneAndroidIcon sx={{ fontSize: 64, mb: 2, color: 'text.disabled' }} />
+                            <Typography variant="h6" color="text.secondary">
+                                No devices paired
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                                Click "Pair Device" to connect a new client
+                            </Typography>
+                        </Box>
+                    </Grid>
+                )}
+            </Grid>
 
             <Pairing open={pairingOpen} onClose={() => setPairingOpen(false)} />
         </Box>

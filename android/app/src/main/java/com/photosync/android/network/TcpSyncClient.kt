@@ -37,7 +37,7 @@ class TcpSyncClient(
     companion object {
         private const val TAG = "TcpSyncClient"
         private const val CONNECT_TIMEOUT_MS = 5000
-        private const val HEARTBEAT_INTERVAL_MS = 30000L
+        private const val HEARTBEAT_INTERVAL_MS = 10000L
     }
     
     private var heartbeatJob: kotlinx.coroutines.Job? = null
@@ -112,6 +112,7 @@ class TcpSyncClient(
             Log.d(TAG, "Sent Heartbeat")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send heartbeat", e)
+            disconnect()
         }
     }
     
@@ -225,6 +226,40 @@ class TcpSyncClient(
         false
     }
     
+    suspend fun sendPhotoDataStream(inputStream: java.io.InputStream): Boolean = withContext(Dispatchers.IO) {
+        // Do NOT catch exceptions here
+        val buffer = ByteArray(1024 * 1024) // 1MB buffer
+        var bytesRead: Int
+        
+        val out = outputStream ?: throw java.io.IOException("Not connected")
+        
+        try {
+            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                // Send FILE_CHUNK
+                // Create a slice of the buffer if bytesRead < buffer.size, or use buffer directly
+                // To avoid copying for the last chunk if possible, but NetworkPacket.createBinary likely copies anyway.
+                // Optimally for the last chunk:
+                val chunk = if (bytesRead == buffer.size) buffer else buffer.copyOf(bytesRead)
+                
+                val packet = NetworkPacket.createBinary(PacketType.FILE_CHUNK, chunk)
+                out.write(packet.toBytes())
+                out.flush()
+                
+                _syncProgress.value = _syncProgress.value.copy(bytesTransferred = _syncProgress.value.bytesTransferred + chunk.size)
+            }
+        } finally {
+             // We don't close the inputStream here, we leave it to the caller
+        }
+        
+        // Send TRANSFER_COMPLETE
+        val json = JSONObject()
+        json.put("status", "completed")
+        val completePacket = NetworkPacket.create(PacketType.TRANSFER_COMPLETE, json)
+        val response = sendRequest(completePacket)
+        
+        return@withContext (response != null && response.header.type == PacketType.TRANSFER_COMPLETE)
+    }
+
     suspend fun sendPhotoData(data: ByteArray): Boolean = withContext(Dispatchers.IO) {
         // Do NOT catch exceptions here
         val chunkSize = 1024 * 1024 // 1MB chunks

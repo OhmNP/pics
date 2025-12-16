@@ -17,6 +17,10 @@ import com.photosync.android.model.SyncProgress
 import com.photosync.android.network.TcpSyncClient
 import com.photosync.android.network.UdpDiscoveryListener
 import com.photosync.android.repository.MediaRepository
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +44,11 @@ class EnhancedSyncService : Service() {
     val serverStatus: StateFlow<ServerConnectivityStatus> = _serverStatus.asStateFlow()
     
     private var monitoringJob: Job? = null
+    private lateinit var connectivityManager: ConnectivityManager
+    private lateinit var networkCallback: ConnectivityManager.NetworkCallback
+    
+    // Track active clients to force-close them on destruction
+    private val activeClients = java.util.Collections.synchronizedList(mutableListOf<TcpSyncClient>())
     
     companion object {
         private const val TAG = "EnhancedSyncService"
@@ -81,6 +90,7 @@ class EnhancedSyncService : Service() {
         database = AppDatabase.getDatabase(this)
         mediaRepository = MediaRepository(contentResolver, database)
         createNotificationChannel()
+        setupNetworkMonitoring()
         startMonitoring()
     }
     
@@ -204,6 +214,12 @@ class EnhancedSyncService : Service() {
         syncJob?.cancel()
         _syncState.value = SyncState.Idle
         _syncProgress.value = SyncProgress()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
         stopSelf()
     }
     
@@ -263,6 +279,7 @@ class EnhancedSyncService : Service() {
             val jobs = List(workerCount) { workerId ->
                 launch(Dispatchers.IO) {
                     val client = TcpSyncClient(serverIp)
+                    activeClients.add(client)
                     try {
                         if (!client.connect()) {
                             Log.w(TAG, "Worker $workerId failed to connect")
@@ -302,14 +319,20 @@ class EnhancedSyncService : Service() {
                             val needsUpload = client.sendPhotoMetadata(item.name, item.size, hash)
                             
                             if (needsUpload) {
-                                val data = contentResolver.openInputStream(item.uri)?.readBytes()
-                                if (data != null) {
-                                    if (client.sendPhotoData(data)) {
-                                        totalBytesTransferred.addAndGet(data.size.toLong())
-                                        mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.SYNCED)
-                                    } else {
-                                        mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.ERROR)
+                                val inputStream = contentResolver.openInputStream(item.uri)
+                                if (inputStream != null) {
+                                    inputStream.use { stream ->
+                                        if (client.sendPhotoDataStream(stream)) {
+                                            totalBytesTransferred.addAndGet(item.size) // Assuming item.size is the correct size
+                                            mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.SYNCED)
+                                        } else {
+                                            Log.e(TAG, "Failed to send photo data for ${item.name}")
+                                            mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.ERROR)
+                                        }
                                     }
+                                } else {
+                                    Log.e(TAG, "Failed to open input stream for ${item.name}")
+                                    mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.ERROR)
                                 }
                             } else {
                                 mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.SYNCED)
@@ -324,6 +347,7 @@ class EnhancedSyncService : Service() {
                         Log.e(TAG, "Worker $workerId error", e)
                     } finally {
                         client.disconnect()
+                        activeClients.remove(client)
                     }
                 }
             }
@@ -389,6 +413,37 @@ class EnhancedSyncService : Service() {
     
 
     
+    private fun setupNetworkMonitoring() {
+        connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+        networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onLost(network: Network) {
+                super.onLost(network)
+                Log.i(TAG, "Network lost: Disconnecting...")
+                serviceScope.launch {
+                   try {
+                       _serverStatus.value = ServerConnectivityStatus.DISCONNECTED
+                       monitoringClient?.disconnect()
+                   } catch (e: Exception) {
+                       Log.e(TAG, "Error handling network loss", e)
+                   }
+                }
+            }
+
+            override fun onAvailable(network: Network) {
+                super.onAvailable(network)
+                Log.i(TAG, "Network available")
+            }
+        }
+
+        val networkRequest = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .build()
+
+        connectivityManager.registerNetworkCallback(networkRequest, networkCallback)
+    }
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -422,17 +477,47 @@ class EnhancedSyncService : Service() {
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
         Log.i(TAG, "Task removed, stopping service")
+        
+        // Signal system immediately
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+        
+        forceCleanup()
         stopSelf()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         instance = null
+        forceCleanup()
+    }
+    
+    private fun forceCleanup() {
+        try {
+            connectivityManager.unregisterNetworkCallback(networkCallback)
+        } catch (e: Exception) {
+            // Check if init before logging effectively
+             Log.e(TAG, "Error unregistering network callback", e)
+        }
+        
         try {
             monitoringClient?.disconnect()
         } catch (e: Exception) {
             Log.e(TAG, "Error disconnecting in onDestroy", e)
         }
+        
+        // Force disconnect all active workers
+        synchronized(activeClients) {
+            activeClients.forEach { 
+                try { it.disconnect() } catch (e: Exception) { Log.e(TAG, "Error forcing disconnect", e) }
+            }
+            activeClients.clear()
+        }
+        
         serviceScope.cancel()
     }
 }

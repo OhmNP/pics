@@ -4,6 +4,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <vector>
 
 struct ConnectionInfo {
   int sessionId;
@@ -30,6 +31,7 @@ public:
 
   std::map<int, ConnectionInfo> getActiveConnections();
   int getActiveCount();
+  std::vector<int> cleanStaleConnections(int timeoutSeconds);
 
 private:
   ConnectionManager() = default;
