@@ -39,6 +39,7 @@ function getStatusColor(status: string): string {
 
 interface GroupedConnection {
     device_id: string;
+    user_name?: string;
     ip_address: string;
     status: string; // Aggregate status
     photos_uploaded: number;
@@ -70,6 +71,7 @@ export default function LiveConnections() {
         if (!deviceMap.has(conn.device_id)) {
             deviceMap.set(conn.device_id, {
                 device_id: conn.device_id,
+                user_name: conn.user_name,
                 ip_address: conn.ip_address,
                 status: conn.status,
                 photos_uploaded: 0,
@@ -90,6 +92,10 @@ export default function LiveConnections() {
         // If any session is syncing, group is syncing
         if (conn.status.toLowerCase() === 'syncing') {
             group.status = 'syncing';
+        }
+        // Update user_name if we found one and didn't have one before
+        if (conn.user_name && !group.user_name) {
+            group.user_name = conn.user_name;
         }
     });
 
@@ -178,11 +184,11 @@ function LiveConnectionCard({ group }: { group: GroupedConnection }) {
                         </Box>
                         <Box>
                             <Typography variant="subtitle1" fontWeight="bold" lineHeight={1.2}>
-                                {group.device_id}
+                                {group.user_name || group.device_id}
                             </Typography>
                             <Box display="flex" alignItems="center" gap={1}>
                                 <Typography variant="caption" color="text.secondary">
-                                    {group.ip_address}
+                                    {group.user_name ? group.device_id : group.ip_address}
                                 </Typography>
                                 {group.session_count > 1 && (
                                     <Chip

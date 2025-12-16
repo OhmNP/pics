@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 export interface Connection {
     session_id: number;
     device_id: string;
+    user_name?: string;
     ip_address: string;
     connected_at: string;
     status: string;

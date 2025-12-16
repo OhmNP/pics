@@ -9,6 +9,7 @@
 struct ConnectionInfo {
   int sessionId;
   std::string deviceId;
+  std::string userName;
   std::string ipAddress;
   std::chrono::system_clock::time_point connectedAt;
   std::string status; // "handshake", "syncing", "idle"
@@ -22,7 +23,7 @@ public:
   static ConnectionManager &getInstance();
 
   void addConnection(int sessionId, const std::string &deviceId,
-                     const std::string &ipAddress);
+                     const std::string &ipAddress, const std::string &userName);
   void removeConnection(int sessionId);
   void updateStatus(int sessionId, const std::string &status);
   void updateProgress(int sessionId, int photosUploaded,
@@ -31,6 +32,7 @@ public:
 
   std::map<int, ConnectionInfo> getActiveConnections();
   int getActiveCount();
+  bool isClientConnected(const std::string &deviceId);
   std::vector<int> cleanStaleConnections(int timeoutSeconds);
 
 private:

@@ -179,6 +179,11 @@ bool DatabaseManager::createSchema() {
   // Create initial admin user if none exists
   insertInitialAdminUser();
 
+  // Run migrations
+  if (!migrateSchema()) {
+    LOG_ERROR("Failed to migrate schema");
+  }
+
   LOG_INFO("Database schema created successfully");
   return true;
 }
@@ -195,7 +200,26 @@ bool DatabaseManager::executeSQL(const std::string &sql) {
   return true;
 }
 
-int DatabaseManager::getOrCreateClient(const std::string &deviceId) {
+bool DatabaseManager::migrateSchema() {
+  // Add user_name column to clients table if it doesn't exist
+  const char *checkSql = "SELECT user_name FROM clients LIMIT 1";
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db_, checkSql, -1, &stmt, nullptr) != SQLITE_OK) {
+    // Column likely doesn't exist
+    const char *alterSql = "ALTER TABLE clients ADD COLUMN user_name TEXT";
+    if (!executeSQL(alterSql)) {
+      LOG_ERROR("Failed to add user_name column to clients table");
+      return false;
+    }
+    LOG_INFO("Added user_name column to clients table");
+  } else {
+    sqlite3_finalize(stmt);
+  }
+  return true;
+}
+
+int DatabaseManager::getOrCreateClient(const std::string &deviceId,
+                                       const std::string &userName) {
   // Try to find existing client
   sqlite3_stmt *stmt;
   const char *sql = "SELECT id FROM clients WHERE device_id = ?";
@@ -215,10 +239,21 @@ int DatabaseManager::getOrCreateClient(const std::string &deviceId) {
 
   sqlite3_finalize(stmt);
 
+  // If client exists, update user_name if provided
+  if (clientId != -1 && !userName.empty()) {
+    const char *updateSql = "UPDATE clients SET user_name = ? WHERE id = ?";
+    if (sqlite3_prepare_v2(db_, updateSql, -1, &stmt, nullptr) == SQLITE_OK) {
+      sqlite3_bind_text(stmt, 1, userName.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_int(stmt, 2, clientId);
+      sqlite3_step(stmt);
+      sqlite3_finalize(stmt);
+    }
+  }
+
   // If client doesn't exist, create it
   if (clientId == -1) {
     const char *insertSql = "INSERT INTO clients (device_id, last_seen, "
-                            "total_photos) VALUES (?, ?, 0)";
+                            "total_photos, user_name) VALUES (?, ?, 0, ?)";
     if (sqlite3_prepare_v2(db_, insertSql, -1, &stmt, nullptr) != SQLITE_OK) {
       LOG_ERROR("Failed to prepare insert statement: " +
                 std::string(sqlite3_errmsg(db_)));
@@ -228,6 +263,7 @@ int DatabaseManager::getOrCreateClient(const std::string &deviceId) {
     std::string timestamp = getCurrentTimestamp();
     sqlite3_bind_text(stmt, 1, deviceId.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 2, timestamp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, userName.c_str(), -1, SQLITE_TRANSIENT);
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
       LOG_ERROR("Failed to insert client: " + std::string(sqlite3_errmsg(db_)));
@@ -274,7 +310,8 @@ std::vector<DatabaseManager::ClientRecord> DatabaseManager::getClients() {
             c.device_id, 
             c.last_seen, 
             c.total_photos,
-            COALESCE(SUM(m.size), 0) as storage_used
+            COALESCE(SUM(m.size), 0) as storage_used,
+            c.user_name
         FROM clients c
         LEFT JOIN metadata m ON c.id = m.client_id
         GROUP BY c.id
@@ -296,6 +333,10 @@ std::vector<DatabaseManager::ClientRecord> DatabaseManager::getClients() {
         reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
     client.photoCount = sqlite3_column_int(stmt, 3);
     client.storageUsed = sqlite3_column_int64(stmt, 4);
+
+    const char *userName =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 5));
+    client.userName = userName ? userName : "";
 
     clients.push_back(client);
   }

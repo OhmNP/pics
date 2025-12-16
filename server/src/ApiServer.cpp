@@ -344,7 +344,9 @@ void ApiServer::setupRoutes() {
     return res;
   });
 
-  // Catchall route for static files - must be last
+  // I need to view the file first to find the function body as regex failed
+  // earlier or I didn't search properly.
+  // Skipping this replace for now.oute for static files - must be last
   CROW_ROUTE((*g_app), "/<path>")
   ([](std::string path) {
     // Default to index.html for root
@@ -496,12 +498,11 @@ std::string ApiServer::handleGetClients() {
       json clientJson = {
           {"id", client.id},
           {"deviceId", client.deviceId},
-          {"name", client.deviceId}, // Use deviceId as name for now, could add
-                                     // alias later
+          {"name", client.userName.empty() ? client.deviceId : client.userName},
           {"lastSeen", client.lastSeen},
           {"photoCount", client.photoCount},
           {"storageUsed", client.storageUsed},
-          {"isOnline", isOnline}};
+          {"isOnline", connMgr.isClientConnected(client.deviceId)}};
 
       if (currentSession != nullptr) {
         clientJson["currentSession"] = currentSession;
@@ -566,6 +567,7 @@ std::string ApiServer::handleGetConnections() {
 
       json conn = {{"session_id", info.sessionId},
                    {"device_id", info.deviceId},
+                   {"user_name", info.userName},
                    {"ip_address", info.ipAddress},
                    {"connected_at", connectedBuf},
                    {"status", info.status},

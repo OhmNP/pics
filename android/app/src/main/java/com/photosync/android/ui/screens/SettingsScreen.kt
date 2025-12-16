@@ -1,36 +1,78 @@
 package com.photosync.android.ui.screens
 
-import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.QrCodeScanner
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.photosync.android.ui.components.GlassCard
 import com.photosync.android.ui.components.GradientBox
 import com.photosync.android.ui.components.NeonText
-import com.photosync.android.ui.theme.*
+import com.photosync.android.ui.theme.Error
+import com.photosync.android.ui.theme.Primary
+import com.photosync.android.ui.theme.PrimaryGlow
+import com.photosync.android.ui.theme.Secondary
+import com.photosync.android.ui.theme.Success
+import com.photosync.android.ui.theme.SurfaceVariant
+import com.photosync.android.ui.theme.TextPrimary
+import com.photosync.android.ui.theme.TextSecondary
 import com.photosync.android.viewmodel.SettingsViewModel
 
 @Composable
@@ -41,9 +83,19 @@ fun SettingsScreen(
 ) {
     val serverIp by viewModel.serverIp.collectAsStateWithLifecycle()
     val serverPort by viewModel.serverPort.collectAsStateWithLifecycle()
+    val userName by viewModel.userName.collectAsStateWithLifecycle()
     
     // Gradient Background (matching Home)
-    GradientBox(modifier = modifier.fillMaxSize()) {
+    val focusManager = LocalFocusManager.current
+    GradientBox(
+        modifier = modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = {
+                    focusManager.clearFocus()
+                })
+            }
+    ) {
         // Ambient Background Blobs
         Box(
             modifier = Modifier
@@ -75,7 +127,10 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             // --- Profile Header ---
-            ProfileHeaderSection()
+            ProfileHeaderSection(
+                userName = userName,
+                onUserNameChange = viewModel::updateUserName
+            )
 
             // --- Server Configuration Card ---
             SettingsSectionTitle("Configuration")
@@ -101,7 +156,10 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun ProfileHeaderSection() {
+private fun ProfileHeaderSection(
+    userName: String,
+    onUserNameChange: (String) -> Unit
+) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -135,12 +193,77 @@ private fun ProfileHeaderSection() {
         
         Spacer(modifier = Modifier.height(16.dp))
         
-        NeonText(
-            text = "User Profile",
-            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-            color = TextPrimary,
-            glowColor = PrimaryGlow.copy(alpha = 0.5f)
-        )
+        // Editable User Name or Display Text
+        var isEditing by remember { mutableStateOf(userName.isBlank()) }
+        val focusRequester = remember { FocusRequester() }
+        
+        if (isEditing) {
+            var hasGainedFocus by remember { mutableStateOf(false) }
+            
+            LaunchedEffect(Unit) {
+               focusRequester.requestFocus()
+            }
+            
+            OutlinedTextField(
+                value = userName,
+                onValueChange = onUserNameChange,
+                label = { Text("Display Name") },
+                textStyle = MaterialTheme.typography.headlineSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                ),
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Primary,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedLabelColor = Primary,
+                    unfocusedLabelColor = TextSecondary,
+                    cursorColor = Primary,
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent
+                ),
+                modifier = Modifier
+                    .fillMaxWidth(0.8f)
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { focusState ->
+                        if (focusState.isFocused) {
+                            hasGainedFocus = true
+                        }
+                        if (!focusState.isFocused && hasGainedFocus && userName.isNotBlank() && isEditing) {
+                            isEditing = false
+                        }
+                    },
+                trailingIcon = {
+                    IconButton(onClick = { if (userName.isNotBlank()) isEditing = false }) {
+                        Icon(Icons.Rounded.Check, "Save", tint = Primary)
+                    }
+                }
+            )
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                NeonText(
+                    text = userName,
+                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                    color = TextPrimary,
+                    glowColor = PrimaryGlow.copy(alpha = 0.5f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                IconButton(onClick = { isEditing = true }) {
+                    Icon(
+                        imageVector = Icons.Rounded.Edit,
+                        contentDescription = "Edit Name",
+                        tint = TextSecondary.copy(alpha = 0.5f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+
         
         Text(
             text = "PhotoSync Client",

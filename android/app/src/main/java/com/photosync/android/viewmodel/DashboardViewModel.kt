@@ -30,12 +30,18 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     private val _serverStatus = MutableStateFlow(EnhancedSyncService.ServerConnectivityStatus.DISCONNECTED)
     val serverStatus: StateFlow<EnhancedSyncService.ServerConnectivityStatus> = _serverStatus.asStateFlow()
     
+    private val settings = com.photosync.android.data.SettingsManager(application)
+    private val _userName = MutableStateFlow(settings.userName)
+    val userName: StateFlow<String> = _userName.asStateFlow()
+    
     private var serviceMonitoringJob: Job? = null
 
     init {
         database = AppDatabase.getDatabase(application)
         mediaRepository = MediaRepository(application.contentResolver, database)
         monitorServiceState()
+        // Refresh username when it might change (simplified for now, just load on init)
+        // Ideally observe prefs change or reload on resume
     }
     
     private fun monitorServiceState() {

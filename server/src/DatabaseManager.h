@@ -65,13 +65,15 @@ public:
   bool createSchema();
 
   // Client operations
-  int getOrCreateClient(const std::string &deviceId);
+  int getOrCreateClient(const std::string &deviceId,
+                        const std::string &userName = "");
   bool updateClientLastSeen(int clientId);
   bool deleteClient(int clientId);
 
   struct ClientRecord {
     int id;
     std::string deviceId;
+    std::string userName;
     std::string lastSeen;
     int photoCount;
     long long storageUsed;
@@ -115,6 +117,7 @@ public:
 
   // Migration operations
   bool migratePhotosToMetadata();
+  bool migrateSchema();
 
   // Authentication operations
   bool createAdminUser(const std::string &username,

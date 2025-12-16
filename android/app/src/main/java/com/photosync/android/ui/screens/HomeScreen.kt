@@ -50,6 +50,7 @@ fun HomeScreen(
     val pendingCount by viewModel.pendingCount.collectAsState(initial = 0)
     val recentUploads by viewModel.recentUploads.collectAsStateWithLifecycle(initialValue = emptyList())
     val serverStatus by viewModel.serverStatus.collectAsStateWithLifecycle()
+    val userName by viewModel.userName.collectAsStateWithLifecycle()
 
     // Gradient Background
     GradientBox(modifier = modifier.fillMaxSize()) {
@@ -84,7 +85,7 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             // --- Header ---
-            HeaderSection()
+            HeaderSection(userName)
 
             // --- Main Status Card (Visualizer) ---
             SyncStatusVisualizerCard(state = syncState, progress = syncProgress)
@@ -149,7 +150,7 @@ fun HomeScreen(
 }
 
 @Composable
-private fun HeaderSection() {
+private fun HeaderSection(userName: String) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             // Brand Logo
@@ -193,7 +194,7 @@ private fun HeaderSection() {
         }
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "Good Evening, Alex", // Should be dynamic
+            text = if (userName.isNotBlank()) "Good Evening, $userName" else "Good Evening",
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onBackground
         )

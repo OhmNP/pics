@@ -143,6 +143,7 @@ void Session::sendPacket(const Packet &packet) {
 void Session::handlePairingRequest(const json &payload) {
   std::string deviceId = payload.value("deviceId", "");
   std::string token = payload.value("token", "");
+  std::string userName = payload.value("userName", "");
 
   if (deviceId.empty()) {
     sendPacket(
@@ -169,7 +170,7 @@ void Session::handlePairingRequest(const json &payload) {
 
   if (authorized) {
     // Create or get client
-    clientId_ = db_.getOrCreateClient(deviceId);
+    clientId_ = db_.getOrCreateClient(deviceId, userName);
     if (clientId_ == -1) {
       sendPacket(ProtocolParser::createPairingResponse(
           -1, false, "Failed to create client"));
@@ -188,7 +189,7 @@ void Session::handlePairingRequest(const json &payload) {
       try {
         ConnectionManager::getInstance().addConnection(
             sessionId_, deviceId,
-            socket_.remote_endpoint().address().to_string());
+            socket_.remote_endpoint().address().to_string(), userName);
       } catch (...) {
         // ignore endpoint error
       }

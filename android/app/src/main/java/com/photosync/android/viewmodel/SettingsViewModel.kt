@@ -28,6 +28,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     
     private val _serverPort = MutableStateFlow(settings.serverPort.toString())
     val serverPort: StateFlow<String> = _serverPort.asStateFlow()
+
+    private val _userName = MutableStateFlow(settings.userName)
+    val userName: StateFlow<String> = _userName.asStateFlow()
     
     fun updateServerIp(ip: String) {
         _serverIp.value = ip
@@ -35,6 +38,12 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     
     fun updateServerPort(port: String) {
         _serverPort.value = port
+    }
+
+    fun updateUserName(name: String) {
+        _userName.value = name
+        // Save immediately to preferences
+        settings.userName = name
     }
     
     fun saveSettings(): Boolean {
@@ -45,6 +54,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         
         settings.serverIp = _serverIp.value
         settings.serverPort = port
+        settings.userName = _userName.value
         
         // Restart connection service with new settings
         restartSyncService()

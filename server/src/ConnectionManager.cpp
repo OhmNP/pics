@@ -7,12 +7,14 @@ ConnectionManager &ConnectionManager::getInstance() {
 
 void ConnectionManager::addConnection(int sessionId,
                                       const std::string &deviceId,
-                                      const std::string &ipAddress) {
+                                      const std::string &ipAddress,
+                                      const std::string &userName) {
   std::lock_guard<std::mutex> lock(mutex_);
 
   ConnectionInfo info;
   info.sessionId = sessionId;
   info.deviceId = deviceId;
+  info.userName = userName;
   info.ipAddress = ipAddress;
   info.connectedAt = std::chrono::system_clock::now();
   info.status = "handshake";
@@ -64,6 +66,16 @@ std::map<int, ConnectionInfo> ConnectionManager::getActiveConnections() {
 int ConnectionManager::getActiveCount() {
   std::lock_guard<std::mutex> lock(mutex_);
   return static_cast<int>(connections_.size());
+}
+
+bool ConnectionManager::isClientConnected(const std::string &deviceId) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (const auto &pair : connections_) {
+    if (pair.second.deviceId == deviceId) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::vector<int> ConnectionManager::cleanStaleConnections(int timeoutSeconds) {

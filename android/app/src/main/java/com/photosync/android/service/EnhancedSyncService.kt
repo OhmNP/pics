@@ -163,7 +163,8 @@ class EnhancedSyncService : Service() {
 
                     if (connected) {
                         // Start Session to register with ConnectionManager
-                        val sessionId = monitoringClient!!.startSession(deviceId)
+                        val userName = settingsManager.userName
+                        val sessionId = monitoringClient!!.startSession(deviceId, "", userName)
 
                         if (sessionId != null) {
                             _serverStatus.value = ServerConnectivityStatus.CONNECTED
@@ -273,6 +274,7 @@ class EnhancedSyncService : Service() {
         val totalBytesTransferred = java.util.concurrent.atomic.AtomicLong(0)
         
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+        val userName = settingsManager.userName
         
         // Launch workers
         coroutineScope {
@@ -286,7 +288,7 @@ class EnhancedSyncService : Service() {
                             return@launch
                         }
                         
-                        val sessionId = client.startSession(deviceId)
+                        val sessionId = client.startSession(deviceId, "", userName)
                         if (sessionId == null) {
                             Log.w(TAG, "Worker $workerId failed to start session")
                             return@launch

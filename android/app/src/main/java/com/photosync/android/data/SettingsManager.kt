@@ -9,6 +9,7 @@ class SettingsManager(context: Context) {
     companion object {
         private const val KEY_SERVER_IP = "server_ip"
         private const val KEY_SERVER_PORT = "server_port"
+        private const val KEY_USER_NAME = "user_name"
         private const val DEFAULT_IP = ""
         private const val DEFAULT_PORT = 50505
     }
@@ -20,6 +21,10 @@ class SettingsManager(context: Context) {
     var serverPort: Int
         get() = prefs.getInt(KEY_SERVER_PORT, DEFAULT_PORT)
         set(value) = prefs.edit().putInt(KEY_SERVER_PORT, value).apply()
+
+    var userName: String
+        get() = prefs.getString(KEY_USER_NAME, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_USER_NAME, value).apply()
 
     var isOnboardingCompleted: Boolean
         get() = prefs.getBoolean("onboarding_completed", false) || serverIp != DEFAULT_IP

@@ -185,11 +185,12 @@ class TcpSyncClient(
         }
     }
     
-    suspend fun startSession(deviceId: String, token: String = ""): Int? = withContext(Dispatchers.IO) {
+    suspend fun startSession(deviceId: String, token: String = "", userName: String = ""): Int? = withContext(Dispatchers.IO) {
         try {
             val json = JSONObject()
             json.put("deviceId", deviceId)
             json.put("token", token)
+            json.put("userName", userName)
             
             val packet = NetworkPacket.create(PacketType.PAIRING_REQUEST, json)
             val response = sendRequest(packet)
