@@ -13,3 +13,11 @@ cmake-build*/
 Thumbs.db
 
 #docs
+
+#Installation Artifacts
+dashboard/release/
+photosync.db
+server.crt
+server.key
+server.log
+storage/
