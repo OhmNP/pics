@@ -34,6 +34,13 @@ android {
     }
     buildFeatures {
         compose true
+        buildConfig true
+    }
+    
+    packaging {
+        resources {
+            excludes += ['/META-INF/{AL2.0,LGPL2.1}', '/META-INF/LICENSE.md', '/META-INF/LICENSE-notice.md']
+        }
     }
 }
 
@@ -66,6 +73,8 @@ dependencies {
     implementation "androidx.room:room-ktx:2.6.1"
     kapt "androidx.room:room-compiler:2.6.1"
     implementation "com.squareup.okio:okio:3.6.0"
+    implementation "androidx.security:security-crypto:1.1.0-alpha06"
+    
     
     // Paging
     implementation "androidx.paging:paging-runtime-ktx:3.2.1"
@@ -80,11 +89,27 @@ dependencies {
     // ZXing for QR code decoding
     implementation "com.google.zxing:core:3.5.2"
     
+    
     testImplementation libs.junit
+    testImplementation "org.json:json:20210307"
+    
+    // Unit test dependencies
+    testImplementation "io.mockk:mockk:1.13.8"
+    testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3"
+    testImplementation "androidx.arch.core:core-testing:2.2.0"
+    
+    // Instrumented test dependencies
     androidTestImplementation libs.androidx.junit
     androidTestImplementation libs.androidx.espresso.core
     androidTestImplementation platform(libs.androidx.compose.bom)
     androidTestImplementation libs.androidx.ui.test.junit4
+    androidTestImplementation "io.mockk:mockk-android:1.13.8"
+    androidTestImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3"
+    androidTestImplementation "androidx.arch.core:core-testing:2.2.0"
+    androidTestImplementation "androidx.work:work-testing:2.9.0"
+    androidTestImplementation "androidx.test:core-ktx:1.5.0"
+    androidTestImplementation "androidx.test.ext:junit-ktx:1.1.5"
+    
     debugImplementation libs.androidx.ui.tooling
     debugImplementation libs.androidx.ui.test.manifest
 }

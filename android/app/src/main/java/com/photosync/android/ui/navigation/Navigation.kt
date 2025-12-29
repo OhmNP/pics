@@ -101,6 +101,8 @@ fun PhotoSyncNavigation(
                     }
                 )
             }
+
+
         }
     }
 }

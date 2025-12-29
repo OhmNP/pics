@@ -35,6 +35,9 @@ fun SyncStatusScreen(
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
     val syncProgress by viewModel.syncProgress.collectAsStateWithLifecycle()
     val syncedCount by viewModel.syncedCount.collectAsStateWithLifecycle(initialValue = 0)
+    val inProgressCount by viewModel.inProgressCount.collectAsStateWithLifecycle(initialValue = 0)
+    val failedCount by viewModel.failedCount.collectAsStateWithLifecycle(initialValue = 0)
+    val lastBackup by viewModel.lastSuccessfulBackup.collectAsStateWithLifecycle()
     
     val isSyncing = syncState is EnhancedSyncService.SyncState.Syncing
     val isPaused = syncState == EnhancedSyncService.SyncState.Paused
@@ -126,28 +129,35 @@ fun SyncStatusScreen(
             // --- Detailed Status List ---
             GlassCard {
                 Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
                     StatusRow(
                         title = "Backup in Progress",
-                        value = "${syncProgress.totalFiles - syncProgress.currentFileIndex} Photos", // Remaining
-                        subtitle = "Estimated remaining: ${formatTime(syncProgress.estimatedTimeRemaining)}",
-                        progress = animatedProgress(syncProgress.progressPercentage / 100f),
-                        showProgress = true
+                        value = "$inProgressCount Photos", 
+                        subtitle = if (inProgressCount > 0) "Pending upload" else "All caught up",
+                        progress = if (syncProgress.totalFiles > 0) syncProgress.progressPercentage / 100f else 0f,
+                        showProgress = inProgressCount > 0
                     )
                     Divider(color = GlassBorder, modifier = Modifier.padding(vertical = 12.dp))
-                    StatusRow(
-                        title = "Uploading Videos",
-                        value = "2 Files", // Mock
-                        subtitle = "300MB / 1.5GB", // Mock
-                        icon = Icons.Rounded.CloudUpload
-                    )
-                    Divider(color = GlassBorder, modifier = Modifier.padding(vertical = 12.dp))
+                    
+                    if (failedCount > 0) {
+                        StatusRow(
+                             title = "Failed Items",
+                             value = "$failedCount Failed",
+                             subtitle = "check network or retry",
+                             icon = Icons.Rounded.ErrorOutline,
+                             iconColor = Error
+                        )
+                         Divider(color = GlassBorder, modifier = Modifier.padding(vertical = 12.dp))
+                    }
+                    
                     StatusRow(
                         title = "Completed",
-                        value = "$syncedCount items today",
-                        subtitle = "All backed up",
+                        value = "$syncedCount items total",
+                        subtitle = if (syncedCount > 0 && lastBackup > 0) "Last backup: ${formatDate(lastBackup)}" else "No Backup Yet",
                         icon = Icons.Rounded.CheckCircle,
                         iconColor = Success
                     )
+                }
                 }
             }
 
@@ -271,4 +281,10 @@ fun animatedProgress(target: Float): Float {
 fun formatTime(millis: Long): String {
     val minutes = millis / 1000 / 60
     return "$minutes min"
+}
+
+fun formatDate(millis: Long): String {
+    val date = java.util.Date(millis)
+    val format = java.text.SimpleDateFormat("MMM dd, HH:mm", java.util.Locale.getDefault())
+    return format.format(date)
 }

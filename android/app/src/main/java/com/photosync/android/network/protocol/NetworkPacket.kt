@@ -15,6 +15,16 @@ enum class PacketType(val value: Int) {
     FILE_CHUNK(0x07),
     TRANSFER_COMPLETE(0x08),
     PROTOCOL_ERROR(0x09),
+    
+    // Phase 2: Resumable Uploads
+    UPLOAD_INIT(0x10),
+    UPLOAD_ACK(0x11),
+    UPLOAD_CHUNK(0x12),
+    UPLOAD_FINISH(0x13),
+    UPLOAD_RESULT(0x14),
+    UPLOAD_ABORT(0x15),
+    UPLOAD_CHUNK_ACK(0x16),
+    
     UNKNOWN(0xFF);
 
     companion object {

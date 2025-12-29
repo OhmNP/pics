@@ -8,6 +8,7 @@ import com.photosync.android.data.AppDatabase
 import com.photosync.android.model.SyncProgress
 import com.photosync.android.repository.MediaRepository
 import com.photosync.android.service.EnhancedSyncService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,8 +39,9 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     init {
         database = AppDatabase.getDatabase(application)
-        mediaRepository = MediaRepository(application.contentResolver, database)
+        mediaRepository = MediaRepository(application, database)
         monitorServiceState()
+        updateStorageInfo()
         // Refresh username when it might change (simplified for now, just load on init)
         // Ideally observe prefs change or reload on resume
     }
@@ -79,6 +81,37 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     
     val syncedCount = mediaRepository.getSyncedCount()
     val pendingCount = mediaRepository.getPendingCount()
+    val failedCount = mediaRepository.getFailedCount()
+    val inProgressCount = mediaRepository.getInProgressCount()
+    
+    private val _storageUsage = MutableStateFlow(0f)
+    val storageUsage: StateFlow<Float> = _storageUsage.asStateFlow()
+
+    private fun updateStorageInfo() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val path = android.os.Environment.getDataDirectory()
+                val stat = android.os.StatFs(path.path)
+                val blockSize = stat.blockSizeLong
+                val totalBlocks = stat.blockCountLong
+                val availableBlocks = stat.availableBlocksLong
+                
+                val totalSpace = totalBlocks * blockSize
+                val availableSpace = availableBlocks * blockSize
+                val usedSpace = totalSpace - availableSpace
+                
+                if (totalSpace > 0) {
+                    _storageUsage.value = usedSpace.toFloat() / totalSpace.toFloat()
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("DashboardViewModel", "Failed to get storage info", e)
+            }
+        }
+    }
+
+    private val _lastSuccessfulBackup = MutableStateFlow(settings.lastSuccessfulBackupTimestamp)
+    val lastSuccessfulBackup: StateFlow<Long> = _lastSuccessfulBackup.asStateFlow()
+    
     val recentUploads = mediaRepository.getRecentSyncedMedia(10)
     
     fun startSync() {

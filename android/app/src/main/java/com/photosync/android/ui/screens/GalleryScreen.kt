@@ -10,6 +10,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,102 +39,180 @@ import com.photosync.android.viewmodel.GalleryViewModel
 @Composable
 fun GalleryScreen(
     modifier: Modifier = Modifier,
-    viewModel: GalleryViewModel = viewModel()
+    viewModel: GalleryViewModel = viewModel(),
 ) {
     val lazyPagingItems = viewModel.pagedMedia.collectAsLazyPagingItems()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     
+    // Media Viewer Overlay State
+    var initialPage by remember { mutableStateOf<Int?>(null) }
+    
+    // BackHandler to close overlay
+    if (initialPage != null) {
+        androidx.activity.compose.BackHandler {
+            initialPage = null
+        }
+    }
+
     // Background
     GradientBox(modifier = modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            
-            // --- Header & Search ---
-            GlassCard(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                cornerRadius = 32.dp
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Search,
-                        contentDescription = "Search",
-                        tint = TextSecondary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    
-                    // Simple search field
-                    TextField(
-                        value = searchQuery,
-                        onValueChange = { viewModel.onSearchQueryChanged(it) },
-                        placeholder = { Text("Search Photos...", color = TextSecondary.copy(alpha = 0.5f)) },
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            cursorColor = Primary
-                        ),
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodyLarge
-                    )
-                    
-                    Icon(
-                        imageVector = Icons.Rounded.FilterList,
-                        contentDescription = "Filter",
-                        tint = Primary,
-                        modifier = Modifier.clickable { /* TODO */ }
-                    )
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                
+                // --- Header & Search ---
+                var isSearchExpanded by remember { mutableStateOf(false) }
+                
+                if (initialPage == null) {
+                    Column {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            if (isSearchExpanded) {
+                                TextField(
+                                    value = searchQuery,
+                                    onValueChange = { viewModel.onSearchQueryChanged(it) },
+                                    placeholder = { Text("Search Photos...", color = TextSecondary.copy(alpha = 0.5f)) },
+                                    colors = TextFieldDefaults.colors(
+                                        focusedContainerColor = Color.Transparent,
+                                        unfocusedContainerColor = Color.Transparent,
+                                        focusedIndicatorColor = Color.Transparent,
+                                        unfocusedIndicatorColor = Color.Transparent,
+                                        focusedTextColor = TextPrimary,
+                                        unfocusedTextColor = TextPrimary,
+                                        cursorColor = Primary
+                                    ),
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.bodyLarge,
+                                    trailingIcon = {
+                                        IconButton(onClick = { 
+                                            isSearchExpanded = false
+                                            viewModel.onSearchQueryChanged("")
+                                        }) {
+                                            Icon(Icons.Rounded.Close, "Close Search", tint = TextSecondary)
+                                        }
+                                    }
+                                )
+                            } else {
+                                NeonText(
+                                    text = "Gallery",
+                                    style = MaterialTheme.typography.headlineSmall
+                                )
+                                
+                                IconButton(
+                                    onClick = { isSearchExpanded = true },
+                                    modifier = Modifier
+                                        .clip(CircleShape)
+                                        .background(SurfaceVariant.copy(alpha = 0.3f))
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Search,
+                                        contentDescription = "Search",
+                                        tint = TextPrimary
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
-            }
-            
-            // --- Photo Grid ---
-            Box(modifier = Modifier.weight(1f)) {
-                 if (lazyPagingItems.loadState.refresh is LoadState.Loading) {
-                     Box(
-                         modifier = Modifier.fillMaxSize(),
-                         contentAlignment = Alignment.Center
-                     ) {
-                         CircularProgressIndicator(color = Primary)
-                     }
-                 } else {
-                     LazyVerticalGrid(
-                         columns = GridCells.Fixed(3),
-                         contentPadding = PaddingValues(4.dp),
-                         horizontalArrangement = Arrangement.spacedBy(4.dp),
-                         verticalArrangement = Arrangement.spacedBy(4.dp),
-                         modifier = Modifier.fillMaxSize()
-                     ) {
-                         items(
-                             count = lazyPagingItems.itemCount,
-                             key = { index -> lazyPagingItems[index]?.id ?: index }
-                         ) { index ->
-                             val item = lazyPagingItems[index]
-                             if (item != null) {
-                                 PhotoGridItem(item)
+                
+                // --- Photo Grid ---
+                Box(modifier = Modifier.weight(1f)) {
+                     if (lazyPagingItems.loadState.refresh is LoadState.Loading) {
+                         Box(
+                             modifier = Modifier.fillMaxSize(),
+                             contentAlignment = Alignment.Center
+                         ) {
+                             CircularProgressIndicator(color = Primary)
+                         }
+                     } else {
+                         LazyVerticalGrid(
+                             columns = GridCells.Fixed(3),
+                             contentPadding = if (initialPage == null) PaddingValues(4.dp) else PaddingValues(0.dp), // irrelevant when hidden but good practice
+                             horizontalArrangement = Arrangement.spacedBy(4.dp),
+                             verticalArrangement = Arrangement.spacedBy(4.dp),
+                             modifier = Modifier.fillMaxSize()
+                         ) {
+                             items(
+                                 count = lazyPagingItems.itemCount,
+                                 key = { index -> lazyPagingItems[index]?.id ?: index }
+                             ) { index ->
+                                 val item = lazyPagingItems[index]
+                                 if (item != null) {
+                                     PhotoGridItem(
+                                         item = item,
+                                         onClick = { initialPage = index }
+                                     )
+                                 }
                              }
                          }
                      }
-                 }
+                }
+            }
+
+            // --- Full Screen Pager Overlay ---
+            if (initialPage != null) {
+                val pagerState = androidx.compose.foundation.pager.rememberPagerState(
+                    initialPage = initialPage!!,
+                    pageCount = { lazyPagingItems.itemCount }
+                )
+                
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                ) {
+                    androidx.compose.foundation.pager.VerticalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize()
+                    ) { page ->
+                        val item = lazyPagingItems[page]
+                        if (item != null) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                AsyncImage(
+                                    model = item.uri,
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Fit
+                                )
+                            }
+                        }
+                    }
+                    
+                    // Back Button Overlay
+                    IconButton(
+                        onClick = { initialPage = null },
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack, // Changed to Default as AutoMirrored might need specific imports
+                            contentDescription = "Back",
+                            tint = Color.White
+                        )
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-fun PhotoGridItem(item: MediaItem) {
+fun PhotoGridItem(
+    item: MediaItem, 
+    onClick: () -> Unit
+) {
     Box(
         modifier = Modifier
             .aspectRatio(1f)
             .clip(RoundedCornerShape(8.dp))
             .background(SurfaceVariant)
+            .clickable(onClick = onClick)
     ) {
         AsyncImage(
             model = item.uri,
@@ -179,7 +260,7 @@ fun PhotoGridItem(item: MediaItem) {
                             ambientShadowColor = Success
                         }
                  )
-            } else if (item.syncStatus == SyncStatus.ERROR) {
+            } else if (item.syncStatus == SyncStatus.FAILED) {
                  Box(
                     modifier = Modifier.size(8.dp).background(Error, CircleShape)
                  )

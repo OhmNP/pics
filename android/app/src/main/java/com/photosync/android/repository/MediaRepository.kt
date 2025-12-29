@@ -15,12 +15,16 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.security.MessageDigest
 
+import android.content.Context
+import com.photosync.android.data.SettingsManager
+
 class MediaRepository(
-    private val contentResolver: ContentResolver,
+    private val context: Context,
     private val database: AppDatabase
 ) {
-    
+    private val contentResolver = context.contentResolver
     private val syncStatusDao = database.syncStatusDao()
+    private val settingsManager = SettingsManager(context)
     
     /**
      * Get paged media items with sync status
@@ -42,6 +46,7 @@ class MediaRepository(
      * Get all media items (for sync operations)
      */
     suspend fun getAllMediaItems(): List<MediaItem> {
+        val excludedFolders = settingsManager.excludedFolders
         val items = mutableListOf<MediaItem>()
         val projection = arrayOf(
             MediaStore.Images.Media._ID,
@@ -78,18 +83,30 @@ class MediaRepository(
                 
                 val syncStatus = syncStatusDao.getSyncStatus(id.toString())
                 
-                items.add(
-                    MediaItem(
-                        id = id.toString(),
-                        uri = contentUri,
-                        name = name,
-                        size = size,
-                        lastModified = modified,
-                        path = path,
-                        hash = syncStatus?.hash ?: "",
-                        syncStatus = syncStatus?.syncStatus ?: SyncStatus.PENDING
+                // Exclusion check
+                var isExcluded = false
+                val relativePath = path.substringAfter("/storage/emulated/0/") // simplified check
+                for (excluded in excludedFolders) {
+                    if (path.contains("/$excluded/") || relativePath.startsWith(excluded)) {
+                        isExcluded = true
+                        break
+                    }
+                }
+                
+                if (!isExcluded) {
+                    items.add(
+                        MediaItem(
+                            id = id.toString(),
+                            uri = contentUri,
+                            name = name,
+                            size = size,
+                            lastModified = modified,
+                            path = path,
+                            hash = syncStatus?.hash ?: "",
+                            syncStatus = syncStatus?.syncStatus ?: SyncStatus.PENDING
+                        )
                     )
-                )
+                }
             }
         }
         
@@ -131,6 +148,33 @@ class MediaRepository(
         syncStatusDao.updateStatusByHashes(hashes, SyncStatus.SYNCED)
     }
     
+    suspend fun markAsFailed(mediaId: String, reason: String, status: SyncStatus = SyncStatus.ERROR) {
+        syncStatusDao.updateStatusWithError(mediaId, System.currentTimeMillis(), reason, status)
+    }
+    
+    suspend fun pauseUploadingItems(reason: String) {
+        syncStatusDao.pauseUploadingItems(SyncStatus.PAUSED_NETWORK, reason)
+    }
+    
+    suspend fun markAsSynced(mediaId: String, hash: String) {
+         // Reset retry count on success
+         syncStatusDao.resetRetryStatus(mediaId, System.currentTimeMillis(), SyncStatus.SYNCED)
+         // Also ensure hash is updated if it wasn't
+         // But resetRetryStatus doesn't update hash. 
+         // We might need a proper upsert. For now, let's just insertSyncStatus if we need to set hash,
+         // but resetRetryStatus is better for just state update.
+         // Actually, let's use insertSyncStatus but with 0 retry count explicitly
+         syncStatusDao.insertSyncStatus(
+            SyncStatusEntity(
+                mediaId = mediaId,
+                hash = hash,
+                syncStatus = SyncStatus.SYNCED,
+                retryCount = 0,
+                lastAttemptTimestamp = System.currentTimeMillis()
+            )
+        )
+    }
+    
     /**
      * Get synced count
      */
@@ -140,6 +184,10 @@ class MediaRepository(
      * Get pending count
      */
     fun getPendingCount(): Flow<Int> = syncStatusDao.getPendingCount()
+
+    fun getFailedCount(): Flow<Int> = syncStatusDao.getFailedCount()
+
+    fun getInProgressCount(): Flow<Int> = syncStatusDao.getInProgressCount()
 
     /**
      * Get recently synced media items

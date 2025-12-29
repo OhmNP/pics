@@ -18,10 +18,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
-    private val settings = SettingsManager(application)
+    private val settings = com.photosync.android.data.SettingsManager(application)
     private val context = application
     private val database = AppDatabase.getDatabase(application)
-    private val mediaRepository = MediaRepository(application.contentResolver, database)
+    private val mediaRepository = MediaRepository(application, database)
     
     private val _serverIp = MutableStateFlow(settings.serverIp)
     val serverIp: StateFlow<String> = _serverIp.asStateFlow()
@@ -31,6 +31,24 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     private val _userName = MutableStateFlow(settings.userName)
     val userName: StateFlow<String> = _userName.asStateFlow()
+    
+    private val _autoSyncEnabled = MutableStateFlow(settings.autoSyncEnabled)
+    val autoSyncEnabled: StateFlow<Boolean> = _autoSyncEnabled.asStateFlow()
+    
+    // Reliability
+    private val _wifiOnly = MutableStateFlow(settings.wifiOnly)
+    val wifiOnly: StateFlow<Boolean> = _wifiOnly.asStateFlow()
+    
+    private val _chargingOnly = MutableStateFlow(settings.chargingOnly)
+    val chargingOnly: StateFlow<Boolean> = _chargingOnly.asStateFlow()
+    
+    private val _batteryThreshold = MutableStateFlow(settings.batteryThreshold)
+    val batteryThreshold: StateFlow<Int> = _batteryThreshold.asStateFlow()
+    
+    // Exclusions
+    // Note: SharedPreferences Set<String> is not observable, so we must manually update flow
+    private val _excludedFolders = MutableStateFlow(settings.excludedFolders)
+    val excludedFolders: StateFlow<Set<String>> = _excludedFolders.asStateFlow()
     
     fun updateServerIp(ip: String) {
         _serverIp.value = ip
@@ -44,6 +62,53 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         _userName.value = name
         // Save immediately to preferences
         settings.userName = name
+    }
+
+    fun updateAutoSyncEnabled(enabled: Boolean) {
+        _autoSyncEnabled.value = enabled
+        settings.autoSyncEnabled = enabled
+        rescheduleSync()
+    }
+    
+    fun updateWifiOnly(enabled: Boolean) {
+        _wifiOnly.value = enabled
+        settings.wifiOnly = enabled
+        rescheduleSync()
+    }
+    
+    fun updateChargingOnly(enabled: Boolean) {
+        _chargingOnly.value = enabled
+        settings.chargingOnly = enabled
+        rescheduleSync()
+    }
+    
+    fun updateBatteryThreshold(threshold: Int) {
+        _batteryThreshold.value = threshold
+        settings.batteryThreshold = threshold
+        rescheduleSync()
+    }
+    
+    fun addExcludedFolder(path: String) {
+        val current = _excludedFolders.value.toMutableSet()
+        if (current.add(path)) {
+            _excludedFolders.value = current
+            settings.excludedFolders = current
+            // No strict need to reschedule sync worker, but the MediaRepository reads this dynamically
+        }
+    }
+    
+    fun removeExcludedFolder(path: String) {
+        val current = _excludedFolders.value.toMutableSet()
+        if (current.remove(path)) {
+            _excludedFolders.value = current
+            settings.excludedFolders = current
+        }
+    }
+    
+    private fun rescheduleSync() {
+        if (context is com.photosync.android.PhotoSyncApplication) {
+            context.scheduleSyncWorker()
+        }
     }
     
     fun saveSettings(): Boolean {

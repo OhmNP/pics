@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,8 +24,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.FolderOff
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Person
@@ -40,6 +45,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -84,6 +91,7 @@ fun SettingsScreen(
     val serverIp by viewModel.serverIp.collectAsStateWithLifecycle()
     val serverPort by viewModel.serverPort.collectAsStateWithLifecycle()
     val userName by viewModel.userName.collectAsStateWithLifecycle()
+    val autoSyncEnabled by viewModel.autoSyncEnabled.collectAsStateWithLifecycle()
     
     // Gradient Background (matching Home)
     val focusManager = LocalFocusManager.current
@@ -123,8 +131,8 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // --- Profile Header ---
             ProfileHeaderSection(
@@ -140,6 +148,27 @@ fun SettingsScreen(
                 onConfigureClick = onNavigateToPairing
             )
 
+            // --- Sync Preferences Card ---
+            SettingsSectionTitle("Sync Preferences")
+            SyncPreferencesCard(
+                autoSyncEnabled = autoSyncEnabled,
+                onAutoSyncChange = viewModel::updateAutoSyncEnabled,
+                wifiOnly = viewModel.wifiOnly.collectAsStateWithLifecycle().value,
+                onWifiOnlyChange = viewModel::updateWifiOnly,
+                chargingOnly = viewModel.chargingOnly.collectAsStateWithLifecycle().value,
+                onChargingOnlyChange = viewModel::updateChargingOnly,
+                batteryThreshold = viewModel.batteryThreshold.collectAsStateWithLifecycle().value,
+                onBatteryThresholdChange = { viewModel.updateBatteryThreshold(it.toInt()) }
+            )
+
+            // --- Exclusions Card ---
+            SettingsSectionTitle("Exclusions")
+            ExclusionsCard(
+                excludedFolders = viewModel.excludedFolders.collectAsStateWithLifecycle().value,
+                onAddFolder = viewModel::addExcludedFolder,
+                onRemoveFolder = viewModel::removeExcludedFolder
+            )
+            
             // --- Data Management Card ---
             SettingsSectionTitle("Data Management")
             DataManagementCard(
@@ -191,7 +220,7 @@ private fun ProfileHeaderSection(
             }
         }
         
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
         
         // Editable User Name or Display Text
         var isEditing by remember { mutableStateOf(userName.isBlank()) }
@@ -208,7 +237,7 @@ private fun ProfileHeaderSection(
                 value = userName,
                 onValueChange = onUserNameChange,
                 label = { Text("Display Name") },
-                textStyle = MaterialTheme.typography.headlineSmall.copy(
+                textStyle = MaterialTheme.typography.titleLarge.copy(
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -248,7 +277,7 @@ private fun ProfileHeaderSection(
             ) {
                 NeonText(
                     text = userName,
-                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                     color = TextPrimary,
                     glowColor = PrimaryGlow.copy(alpha = 0.5f)
                 )
@@ -291,7 +320,7 @@ private fun ServerConfigCard(
 ) {
     GlassCard(modifier = Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(16.dp)
+            modifier = Modifier.padding(12.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically
@@ -312,12 +341,12 @@ private fun ServerConfigCard(
                 Column {
                     Text(
                         text = "Current Server",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
                         color = TextPrimary
                     )
                     Text(
                         text = if (serverIp.isNotBlank()) "$serverIp:$serverPort" else "Not Configured",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = if (serverIp.isNotBlank()) Success else TextSecondary
                     )
                 }
@@ -334,7 +363,8 @@ private fun ServerConfigCard(
                     containerColor = Primary.copy(alpha = 0.2f),
                     contentColor = Primary
                 ),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(vertical = 8.dp)
             ) {
                 Icon(Icons.Rounded.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
@@ -353,7 +383,7 @@ private fun DataManagementCard(onResetHistory: () -> Unit) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
@@ -372,7 +402,7 @@ private fun DataManagementCard(onResetHistory: () -> Unit) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Reset Sync History",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
                         color = TextPrimary
                     )
                     Text(
@@ -430,7 +460,7 @@ private fun AboutCard() {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
@@ -449,7 +479,7 @@ private fun AboutCard() {
             Column {
                 Text(
                     text = "PhotoSync",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
                     color = TextPrimary
                 )
                 Text(
@@ -459,5 +489,289 @@ private fun AboutCard() {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SyncPreferencesCard(
+    autoSyncEnabled: Boolean,
+    onAutoSyncChange: (Boolean) -> Unit,
+    wifiOnly: Boolean,
+    onWifiOnlyChange: (Boolean) -> Unit,
+    chargingOnly: Boolean,
+    onChargingOnlyChange: (Boolean) -> Unit,
+    batteryThreshold: Int,
+    onBatteryThresholdChange: (Float) -> Unit
+) {
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            // Auto Sync
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(Primary.copy(alpha = 0.1f), RoundedCornerShape(12.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.CloudSync,
+                        contentDescription = "Auto Sync",
+                        tint = Primary
+                    )
+                }
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Automatic Background Sync",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "Automatically upload new photos",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                }
+                Switch(
+                    checked = autoSyncEnabled,
+                    onCheckedChange = onAutoSyncChange,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Primary,
+                        checkedTrackColor = Primary.copy(alpha = 0.3f),
+                        uncheckedThumbColor = TextSecondary,
+                        uncheckedTrackColor = SurfaceVariant
+                    )
+                )
+            }
+            
+            HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
+            
+            // WiFi Only
+             Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Wi-Fi Only",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "Save mobile data",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                }
+                Switch(
+                    checked = wifiOnly,
+                    onCheckedChange = onWifiOnlyChange,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Primary,
+                        checkedTrackColor = Primary.copy(alpha = 0.3f),
+                        uncheckedThumbColor = TextSecondary,
+                        uncheckedTrackColor = SurfaceVariant
+                    )
+                )
+            }
+            
+             HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
+             
+             // Charging Only
+             Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Charging Only",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "Save battery life",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                }
+                 Switch(
+                    checked = chargingOnly,
+                    onCheckedChange = onChargingOnlyChange,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Primary,
+                        checkedTrackColor = Primary.copy(alpha = 0.3f),
+                        uncheckedThumbColor = TextSecondary,
+                        uncheckedTrackColor = SurfaceVariant
+                    )
+                )
+            }
+            
+             HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
+             
+             // Battery Threshold
+             Column(
+                 modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp)
+             ) {
+                 Row(
+                     modifier = Modifier.fillMaxWidth(),
+                     horizontalArrangement = Arrangement.SpaceBetween
+                 ) {
+                     Text(
+                        text = "Battery Threshold",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "${batteryThreshold}%",
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+                        color = Primary
+                    )
+                 }
+                 
+                 androidx.compose.material3.Slider(
+                     value = batteryThreshold.toFloat(),
+                     onValueChange = onBatteryThresholdChange,
+                     valueRange = 0f..100f,
+                     steps = 19, // 5% increments
+                     colors = androidx.compose.material3.SliderDefaults.colors(
+                         thumbColor = Primary,
+                         activeTrackColor = Primary,
+                         inactiveTrackColor = SurfaceVariant
+                     )
+                 )
+             }
+        }
+    }
+}
+
+@Composable
+private fun ExclusionsCard(
+    excludedFolders: Set<String>,
+    onAddFolder: (String) -> Unit,
+    onRemoveFolder: (String) -> Unit
+) {
+    var showAddDialog by remember { mutableStateOf(false) }
+    
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+             Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(Secondary.copy(alpha = 0.1f), RoundedCornerShape(12.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.FolderOff,
+                        contentDescription = "Exclusions",
+                        tint = Secondary
+                    )
+                }
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Excluded Folders",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "Skip photos in these paths",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                }
+                
+                IconButton(onClick = { showAddDialog = true }) {
+                    Icon(Icons.Rounded.Add, "Add", tint = Primary)
+                }
+            }
+            
+            if (excludedFolders.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                excludedFolders.forEach { path ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = path,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextSecondary,
+                            modifier = Modifier.weight(1f).padding(end = 8.dp),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                        IconButton(
+                            onClick = { onRemoveFolder(path) },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(Icons.Rounded.Delete, "Remove", tint = Error.copy(alpha = 0.7f))
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if (showAddDialog) {
+        var newPath by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showAddDialog = false },
+            containerColor = SurfaceVariant.copy(alpha = 0.95f),
+            title = { Text("Exclude Folder", color = TextPrimary) },
+            text = { 
+                Column {
+                    Text("Enter relative path (e.g. Screenshots):", color = TextSecondary)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = newPath,
+                        onValueChange = { newPath = it },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Primary,
+                            unfocusedBorderColor = TextSecondary,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            cursorColor = Primary,
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent
+                        )
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (newPath.isNotBlank()) {
+                            onAddFolder(newPath)
+                            showAddDialog = false
+                        }
+                    }
+                ) { Text("Add", color = Primary) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddDialog = false }) { Text("Cancel", color = TextSecondary) }
+            }
+        )
     }
 }

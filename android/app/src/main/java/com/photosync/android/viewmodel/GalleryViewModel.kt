@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 class GalleryViewModel(application: Application) : AndroidViewModel(application) {
     
     private val database = AppDatabase.getDatabase(application)
-    private val mediaRepository = MediaRepository(application.contentResolver, database)
+    private val mediaRepository = MediaRepository(application, database)
     
     private val _searchQuery = MutableStateFlow("")
     val searchQuery = _searchQuery.asStateFlow()

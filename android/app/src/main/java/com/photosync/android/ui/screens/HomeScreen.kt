@@ -51,6 +51,7 @@ fun HomeScreen(
     val recentUploads by viewModel.recentUploads.collectAsStateWithLifecycle(initialValue = emptyList())
     val serverStatus by viewModel.serverStatus.collectAsStateWithLifecycle()
     val userName by viewModel.userName.collectAsStateWithLifecycle()
+    val storageUsage by viewModel.storageUsage.collectAsStateWithLifecycle()
 
     // Gradient Background
     GradientBox(modifier = modifier.fillMaxSize()) {
@@ -93,7 +94,7 @@ fun HomeScreen(
             // --- Stats Grid ---
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Box(Modifier.weight(1f)){
                     // Hybrid Status Logic:
@@ -132,9 +133,10 @@ fun HomeScreen(
                 Box(Modifier.weight(1f)) {
                     GlassStatCard(
                         title = "Storage",
-                        value = "45%", // Mock value for now, could be passed from VM
-                        icon = Icons.Rounded.Storage, // Pie chart would be better but icon is fine
-                        accentColor = Primary
+                        value = "${(storageUsage * 100).toInt()}%",
+                        icon = Icons.Rounded.Storage,
+                        accentColor = Primary,
+                        storageProgress = storageUsage
                     )
                 }
             }
@@ -151,6 +153,15 @@ fun HomeScreen(
 
 @Composable
 private fun HeaderSection(userName: String) {
+    val greeting = remember {
+        val calendar = java.util.Calendar.getInstance()
+        when (calendar.get(java.util.Calendar.HOUR_OF_DAY)) {
+            in 0..11 -> "Good Morning"
+            in 12..16 -> "Good Afternoon"
+            else -> "Good Evening"
+        }
+    }
+
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             // Brand Logo
@@ -194,7 +205,7 @@ private fun HeaderSection(userName: String) {
         }
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = if (userName.isNotBlank()) "Good Evening, $userName" else "Good Evening",
+            text = if (userName.isNotBlank()) "$greeting, $userName" else greeting,
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onBackground
         )
@@ -351,7 +362,8 @@ private fun GlassStatCard(
     value: String,
     icon: ImageVector,
     accentColor: Color,
-    indicator: Boolean = false
+    indicator: Boolean = false,
+    storageProgress: Float? = null
 ) {
     GlassCard(modifier = Modifier.fillMaxWidth().height(140.dp)) {
         Column(
@@ -388,12 +400,13 @@ private fun GlassStatCard(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 
-                if (title == "Storage") {
+                if (storageProgress != null) {
                    CircularProgressIndicator(
-                       progress = { 0.45f },
-                       modifier = Modifier.size(40.dp),
+                       progress = { storageProgress },
+                       modifier = Modifier.size(36.dp),
                        color = Primary,
-                       trackColor = SurfaceVariant
+                       trackColor = SurfaceVariant,
+                       strokeWidth = 4.dp
                    )
                    Spacer(modifier = Modifier.height(4.dp))
                    Text(
@@ -405,7 +418,9 @@ private fun GlassStatCard(
                     Text(
                         text = value,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = TextPrimary
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
             }
@@ -435,7 +450,7 @@ private fun RecentUploadsSection(recentUploads: List<MediaItem>) {
         Spacer(modifier = Modifier.height(16.dp))
         
         LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(recentUploads) { item ->
                 RecentUploadItem(item)
@@ -448,7 +463,7 @@ private fun RecentUploadsSection(recentUploads: List<MediaItem>) {
 fun RecentUploadItem(item: MediaItem) {
     Box(
         modifier = Modifier
-            .size(100.dp, 120.dp)
+            .size(100.dp, 140.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(SurfaceVariant)
     ) {

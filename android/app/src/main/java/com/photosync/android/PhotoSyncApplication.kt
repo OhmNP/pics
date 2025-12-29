@@ -4,6 +4,10 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import androidx.work.*
+import com.photosync.android.data.SettingsManager
+import com.photosync.android.worker.SyncWorker
+import java.util.concurrent.TimeUnit
 
 class PhotoSyncApplication : Application() {
     
@@ -12,6 +16,42 @@ class PhotoSyncApplication : Application() {
         
         // Create notification channels for services
         createNotificationChannels()
+        
+        // Schedule background sync
+        scheduleSyncWorker()
+    }
+    
+    fun scheduleSyncWorker() {
+        val settings = SettingsManager(this)
+        
+        val constraintsBuilder = Constraints.Builder()
+            
+        if (settings.wifiOnly) {
+            constraintsBuilder.setRequiredNetworkType(NetworkType.UNMETERED)
+        } else {
+            constraintsBuilder.setRequiredNetworkType(NetworkType.CONNECTED)
+        }
+        
+        if (settings.chargingOnly) {
+            constraintsBuilder.setRequiresCharging(true)
+        }
+        
+        val constraints = constraintsBuilder.build()
+        
+        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(constraints)
+            .setBackoffCriteria(
+                BackoffPolicy.EXPONENTIAL,
+                WorkRequest.MIN_BACKOFF_MILLIS,
+                TimeUnit.MILLISECONDS
+            )
+            .build()
+            
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "PhotoSyncWorker",
+            ExistingPeriodicWorkPolicy.UPDATE, // Update ensures constraints are refreshed
+            syncRequest
+        )
     }
     
     private fun createNotificationChannels() {

@@ -9,12 +9,21 @@ data class SyncStatusEntity(
     val mediaId: String,  // MediaStore ID or content URI
     val hash: String,
     val syncStatus: SyncStatus,
-    val lastUpdated: Long = System.currentTimeMillis()
+    val fileSize: Long = 0,
+    val uploadId: String? = null,
+    val lastKnownOffset: Long = 0,
+    val lastUpdated: Long = System.currentTimeMillis(),
+    val retryCount: Int = 0,
+    val lastAttemptTimestamp: Long = 0,
+    val failureReason: String? = null
 )
 
 enum class SyncStatus {
     PENDING,
-    SYNCING,
+    UPLOADING, // Active transfer
     SYNCED,
-    ERROR
+    FAILED,    // Fatal or exhausted retries
+    PAUSED,            // Constraints not met
+    PAUSED_NETWORK,    // Waiting for network
+    ERROR              // Generic error state
 }
