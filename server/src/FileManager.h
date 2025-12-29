@@ -47,6 +47,9 @@ public:
   // Check if storage quota allows this upload
   bool hasSpaceAvailable(long long requiredBytes);
 
+  // Check physical disk space
+  bool checkDiskSpace(long long requiredBytes);
+
   // Get current storage usage
   long long getTotalStorageUsed();
 
@@ -56,10 +59,22 @@ public:
 
   // Delete photo file
   bool deletePhoto(const std::string &hash);
+  bool deleteUploadSessionFiles(const std::string &uploadId);
 
   // Get file path for a hash
   std::string getPhotoPath(const std::string &hash,
-                           const std::string &extension);
+                           const std::string &extension,
+                           const std::string &timestamp = "");
+
+  // Phase 2: Resumable Uploads
+  std::string getUploadTempPath(const std::string &uploadId);
+  bool appendChunk(const std::string &uploadId, const std::vector<char> &data);
+  bool finalizeFile(const std::string &uploadId, const std::string &finalPath);
+  long long getFileSize(const std::string &path); // For resume reconciliation
+  std::string generatePhotoPath(const PhotoMetadata &metadata);
+
+  // Phase 3: Integrity
+  std::vector<std::string> getAllPhotoHashes(size_t limit = 0); // 0 = unlimited
 
 private:
   std::string storageDir_;
@@ -69,7 +84,6 @@ private:
 
   std::string getTempDir();
   std::string getPhotosDir();
-  std::string generatePhotoPath(const PhotoMetadata &metadata);
   bool ensureDirectoryExists(const std::string &path);
   bool verifyHash(const std::string &filePath, const std::string &expectedHash);
   void updateStorageUsed(long long delta);

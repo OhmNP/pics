@@ -148,3 +148,49 @@ int ConfigManager::getLockoutDurationMinutes() const {
   return (it != config_.end()) ? std::stoi(it->second)
                                : DEFAULT_LOCKOUT_DURATION;
 }
+
+int ConfigManager::getCleanupIntervalSeconds() const {
+  auto it = config_.find("maintenance.cleanup_interval_seconds");
+  return (it != config_.end()) ? std::stoi(it->second) : 300; // Default 5 mins
+}
+
+// Phase 3: Integrity & Retention
+int ConfigManager::getIntegrityScanInterval() const {
+  auto it = config_.find("integrity.scan_interval");
+  return (it != config_.end()) ? std::stoi(it->second) : 3600;
+}
+
+bool ConfigManager::getIntegrityVerifyHash() const {
+  auto it = config_.find("integrity.verify_hash");
+  if (it != config_.end()) {
+    std::string value = it->second;
+    std::transform(value.begin(), value.end(), value.begin(), ::tolower);
+    return (value == "true" || value == "1" || value == "yes");
+  }
+  return false;
+}
+
+int ConfigManager::getIntegrityMissingCheckInterval() const {
+  auto it = config_.find("integrity.missing_check_interval");
+  return (it != config_.end()) ? std::stoi(it->second) : 3600; // 1 hr
+}
+
+int ConfigManager::getIntegrityOrphanSampleInterval() const {
+  auto it = config_.find("integrity.orphan_sample_interval");
+  return (it != config_.end()) ? std::stoi(it->second) : 86400; // 24 hrs
+}
+
+int ConfigManager::getIntegrityFullScanInterval() const {
+  auto it = config_.find("integrity.full_scan_interval");
+  return (it != config_.end()) ? std::stoi(it->second) : 604800; // 7 days
+}
+
+int ConfigManager::getIntegrityOrphanSampleSize() const {
+  auto it = config_.find("integrity.orphan_sample_size");
+  return (it != config_.end()) ? std::stoi(it->second) : 1000;
+}
+
+int ConfigManager::getDeletedRetentionDays() const {
+  auto it = config_.find("retention.deleted_retention_days");
+  return (it != config_.end()) ? std::stoi(it->second) : 30;
+}

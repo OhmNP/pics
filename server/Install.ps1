@@ -44,6 +44,15 @@ $isUpdate = Test-Path "$InstallPath\bin\PhotoSyncServer.exe"
 if ($isUpdate) {
     Write-Step "Detected existing installation - performing update..."
     
+    # Check for running process
+    $running = Get-Process "PhotoSyncServer" -ErrorAction SilentlyContinue
+    if ($running) {
+        Write-Step "Stopping running PhotoSyncServer..."
+        Stop-Process -Name "PhotoSyncServer" -Force
+        Start-Sleep -Seconds 2
+        Write-Success "Process stopped"
+    }
+    
     # Backup data directory
     $dataPath = "$InstallPath\data"
     if (Test-Path $dataPath) {
@@ -73,6 +82,18 @@ foreach ($dir in @($binPath, $dataPath, $webPath, $configPath, $testPath)) {
 # Copy server executable
 Write-Info "Copying server executable..."
 Copy-Item "build\Release\PhotoSyncServer.exe" "$binPath\" -Force
+
+# Copy SSL Certificates
+Write-Info "Copying SSL certificates..."
+if ((Test-Path "server.crt") -and (Test-Path "server.key")) {
+    Copy-Item "server.crt" "$InstallPath\" -Force
+    Copy-Item "server.key" "$InstallPath\" -Force
+    Write-Info "  Copied server.crt and server.key to root"
+}
+else {
+    Write-Host "WARNING: SSL certificates not found in root directory!" -ForegroundColor Yellow
+    Write-Host "  Run 'python generate_cert.py' or '.\GenerateCerts.ps1' first." -ForegroundColor Yellow
+}
 
 # Copy DLLs from vcpkg
 Write-Info "Copying dependencies from vcpkg..."
@@ -192,7 +213,7 @@ Write-Host ""
 if (-not $SkipUI -and (Test-Path "$webPath\index.html")) {
     Write-Host "To access UI Dashboard:" -ForegroundColor White
     Write-Host "  1. Start the server (above)" -ForegroundColor Gray
-    Write-Host "  2. Open browser: http://localhost:50506" -ForegroundColor Yellow
+    Write-Host "  2. Open browser: https://localhost:50506" -ForegroundColor Yellow
     Write-Host ""
 }
 Write-Host "To test the server:" -ForegroundColor White

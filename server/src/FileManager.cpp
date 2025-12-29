@@ -1,9 +1,13 @@
 #include "FileManager.h"
 #include "Logger.h"
+#include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <openssl/sha.h>
 #include <sstream>
+#include <thread>
+#include <vector>
 
 
 FileManager::FileManager(const std::string &storageDir,
@@ -69,14 +73,37 @@ bool FileManager::photoExists(const std::string &hash) {
 }
 
 std::string FileManager::getPhotoPath(const std::string &hash,
-                                      const std::string &extension) {
-  // Get current year/month for organization
-  auto now = std::chrono::system_clock::now();
-  auto time = std::chrono::system_clock::to_time_t(now);
-  std::tm *tm = std::gmtime(&time);
+                                      const std::string &extension,
+                                      const std::string &timestamp) {
+  std::tm tm = {};
+  if (!timestamp.empty()) {
+    // Parse ISO8601 or SQLite timestamp (YYYY-MM-DD HH:MM:SS)
+    std::istringstream ss(timestamp);
+    ss >> std::get_time(
+              &tm, "%Y-%m-%d %H:%M:%S"); // Try space first (SQLite default)
+    if (ss.fail()) {
+      // Reset and try ISO8601 (T)
+      ss.clear();
+      ss.str(timestamp);
+      ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+
+      if (ss.fail()) {
+        LOG_WARN("Failed to parse timestamp: " + timestamp +
+                 ". Using current time.");
+        auto now = std::chrono::system_clock::now();
+        auto time = std::chrono::system_clock::to_time_t(now);
+        tm = *std::gmtime(&time);
+      }
+    }
+  } else {
+    // Use current time
+    auto now = std::chrono::system_clock::now();
+    auto time = std::chrono::system_clock::to_time_t(now);
+    tm = *std::gmtime(&time);
+  }
 
   std::stringstream path;
-  path << getPhotosDir() << "/" << std::put_time(tm, "%Y/%m") << "/" << hash
+  path << getPhotosDir() << "/" << std::put_time(&tm, "%Y/%m") << "/" << hash
        << extension;
 
   return path.str();
@@ -96,6 +123,18 @@ bool FileManager::hasSpaceAvailable(long long requiredBytes) {
   return available;
 }
 
+bool FileManager::checkDiskSpace(long long requiredBytes) {
+  try {
+    std::filesystem::space_info si = std::filesystem::space(storageDir_);
+    // Keep at least 500MB free
+    long long minFree = 500 * 1024 * 1024;
+    return si.available > (requiredBytes + minFree);
+  } catch (const std::exception &e) {
+    LOG_ERROR("Failed to check disk space: " + std::string(e.what()));
+    return false; // Fail safe
+  }
+}
+
 long long FileManager::getTotalStorageUsed() { return currentStorageUsed_; }
 
 bool FileManager::startUpload(const PhotoMetadata &metadata,
@@ -105,6 +144,13 @@ bool FileManager::startUpload(const PhotoMetadata &metadata,
   // Check quota
   if (!hasSpaceAvailable(metadata.size)) {
     LOG_ERROR("Storage quota exceeded. Cannot start upload for: " +
+              metadata.filename);
+    return false;
+  }
+
+  // Check physical disk space
+  if (!checkDiskSpace(metadata.size)) {
+    LOG_ERROR("Physical disk space low. Cannot start upload for: " +
               metadata.filename);
     return false;
   }
@@ -211,13 +257,13 @@ std::string FileManager::calculateSHA256(const std::string &filePath) {
   unsigned char hash[SHA256_DIGEST_LENGTH];
   SHA256_Final(hash, &sha256);
 
-  // Convert to hex string
   std::stringstream ss;
   for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
     ss << std::hex << std::setw(2) << std::setfill('0')
        << static_cast<int>(hash[i]);
   }
 
+  file.close(); // Explicit close
   return ss.str();
 }
 
@@ -362,5 +408,125 @@ std::string FileManager::generatePhotoPath(const PhotoMetadata &metadata) {
     extension = metadata.filename.substr(dotPos);
   }
 
-  return getPhotoPath(metadata.hash, extension);
+  return getPhotoPath(metadata.hash, extension, metadata.receivedAt);
+}
+
+// Phase 2: Resumable Uploads
+
+std::string FileManager::getUploadTempPath(const std::string &uploadId) {
+  return getTempDir() + "/" + uploadId + ".part";
+}
+
+bool FileManager::appendChunk(const std::string &uploadId,
+                              const std::vector<char> &data) {
+  std::lock_guard<std::mutex> lock(fileMutex_);
+  std::string path = getUploadTempPath(uploadId);
+
+  try {
+    std::ofstream file(path, std::ios::binary | std::ios::app);
+    if (!file) {
+      LOG_ERROR("Failed to open temp file for appending: " + path);
+      return false;
+    }
+    file.write(data.data(), data.size());
+    return true;
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error appending chunk: " + std::string(e.what()));
+    return false;
+  }
+}
+
+bool FileManager::finalizeFile(const std::string &uploadId,
+                               const std::string &finalPath) {
+  std::lock_guard<std::mutex> lock(fileMutex_);
+  std::string tempPath = getUploadTempPath(uploadId);
+
+  if (!std::filesystem::exists(tempPath)) {
+    LOG_ERROR("Temp file missing during finalization: " + tempPath);
+    return false;
+  }
+
+  // Ensure target directory exists
+  std::filesystem::path dir = std::filesystem::path(finalPath).parent_path();
+  if (!ensureDirectoryExists(dir.string())) {
+    return false;
+  }
+
+  // Move file atomically with retry
+  int maxRetries = 3;
+  for (int i = 0; i < maxRetries; ++i) {
+    try {
+      std::filesystem::rename(tempPath, finalPath);
+      // Update storage usage
+      long long size = std::filesystem::file_size(finalPath);
+      updateStorageUsed(size);
+      LOG_INFO("Finalized upload: " + uploadId + " -> " + finalPath);
+      return true;
+    } catch (const std::exception &e) {
+      if (i == maxRetries - 1) {
+        LOG_ERROR("Failed to move finalize file (Attempt " +
+                  std::to_string(i + 1) + "): " + std::string(e.what()));
+        return false;
+      }
+      // Small wait before retry
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+  }
+  return false;
+}
+
+long long FileManager::getFileSize(const std::string &path) {
+  try {
+    if (std::filesystem::exists(path)) {
+      return std::filesystem::file_size(path);
+    }
+  } catch (...) {
+  }
+  return 0;
+}
+
+bool FileManager::deleteUploadSessionFiles(const std::string &uploadId) {
+  std::lock_guard<std::mutex> lock(fileMutex_);
+  std::string path = getUploadTempPath(uploadId);
+  try {
+    if (std::filesystem::exists(path)) {
+      std::filesystem::remove(path);
+      LOG_INFO("Deleted temp file for session: " + uploadId);
+      return true;
+    }
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error deleting upload session files: " + std::string(e.what()));
+  }
+  return false;
+}
+
+std::vector<std::string> FileManager::getAllPhotoHashes(size_t limit) {
+  std::vector<std::string> hashes;
+  std::string photosDir = getPhotosDir();
+  // LOG_INFO("Scanning for integrity in: " + photosDir); // Verbose
+
+  if (!std::filesystem::exists(photosDir)) {
+    return hashes;
+  }
+
+  try {
+    for (const auto &entry :
+         std::filesystem::recursive_directory_iterator(photosDir)) {
+      if (entry.is_regular_file()) {
+        std::string filename = entry.path().stem().string();
+        // Simple validation: check if hex string?
+        // For now, assume stems are hashes if length is 64 (SHA256)
+        if (filename.length() == 64) {
+          hashes.push_back(filename);
+          if (limit > 0 && hashes.size() >= limit) {
+            break;
+          }
+        }
+      }
+    }
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error listing photo hashes: " + std::string(e.what()));
+  }
+
+  return hashes;
 }

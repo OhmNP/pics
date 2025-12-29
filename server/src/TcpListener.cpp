@@ -3,23 +3,62 @@
 #include "ConfigManager.h"
 #include "ConnectionManager.h"
 #include "Logger.h"
+#include "exif.h"
 #include <boost/bind/bind.hpp>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 
+namespace fs = std::filesystem;
 using boost::asio::ip::tcp;
+
+// Helper: 64-bit Network to Host
+long long fromNetworkOrder(long long value) {
+  // Detect endianness or just use a standard swap
+  // Simple check: Network is Big Endian.
+  // If Host is Little Endian (x86), swap.
+  const int num = 1;
+  if (*(char *)&num == 1) { // Little Endian
+    unsigned long long x = value;
+    x = ((x & 0x00000000000000FFULL) << 56) |
+        ((x & 0x000000000000FF00ULL) << 40) |
+        ((x & 0x0000000000FF0000ULL) << 24) |
+        ((x & 0x00000000FF000000ULL) << 8) |
+        ((x & 0x000000FF00000000ULL) >> 8) |
+        ((x & 0x0000FF0000000000ULL) >> 24) |
+        ((x & 0x00FF000000000000ULL) >> 40) |
+        ((x & 0xFF00000000000000ULL) >> 56);
+    return (long long)x;
+  }
+  return value;
+}
+
+#ifdef ERROR
+#undef ERROR
+#endif
+#ifdef INFO
+#undef INFO
+#endif
 
 // --- Session ---
 
-Session::Session(tcp::socket socket, DatabaseManager &db,
-                 FileManager &fileManager)
+Session::Session(boost::asio::ssl::stream<tcp::socket> socket,
+                 DatabaseManager &db, FileManager &fileManager)
     : socket_(std::move(socket)), db_(db), fileManager_(fileManager) {
   headerBuffer_.resize(8); // Fixed header size
   try {
-    std::string clientIp = socket_.remote_endpoint().address().to_string();
-    LOG_INFO("Client connected from " + clientIp);
+    std::string clientIp =
+        socket_.lowest_layer().remote_endpoint().address().to_string();
+    Logger::getInstance().logWithTrace(LogLevel::L_INFO, "",
+                                       "Client connected from " + clientIp);
   } catch (...) {
-    LOG_INFO("Client connected (unknown IP)");
+    Logger::getInstance().logWithTrace(LogLevel::L_INFO, "",
+                                       "Client connected (unknown IP)");
   }
+}
+
+void Session::log(const std::string &message, LogLevel level) {
+  Logger::getInstance().logWithTrace(level, currentTraceId_, message);
 }
 
 Session::~Session() {
@@ -33,7 +72,18 @@ Session::~Session() {
   }
 }
 
-void Session::start() { doReadHeader(); }
+void Session::start() {
+  auto self(shared_from_this());
+  socket_.async_handshake(boost::asio::ssl::stream_base::server,
+                          [this, self](const boost::system::error_code &error) {
+                            if (!error) {
+                              doReadHeader();
+                            } else {
+                              LOG_ERROR("SSL Handshake failed: " +
+                                        error.message());
+                            }
+                          });
+}
 
 void Session::doReadHeader() {
   auto self(shared_from_this());
@@ -87,39 +137,62 @@ void Session::handlePacket(const Packet &packet) {
   // Re-queue read immediately or process
 
   try {
-    switch (packet.header.type) {
-    case PacketType::HEARTBEAT: {
-      try {
-        std::string clientIp = socket_.remote_endpoint().address().to_string();
-        LOG_INFO("Heartbeat received from " + clientIp);
-        if (clientId_ != -1) {
-          db_.updateClientLastSeen(clientId_);
+    // Dispatch based on version
+    if (packet.header.version == PROTOCOL_VERSION) {
+      switch (packet.header.type) {
+      case PacketType::HEARTBEAT: {
+        try {
+          std::string clientIp =
+              socket_.lowest_layer().remote_endpoint().address().to_string();
+          LOG_INFO("Heartbeat received from " + clientIp);
+          if (clientId_ != -1)
+            db_.updateClientLastSeen(clientId_);
+          if (sessionId_ != -1)
+            ConnectionManager::getInstance().updateActivity(sessionId_);
+        } catch (...) {
         }
-        if (sessionId_ != -1) {
-          ConnectionManager::getInstance().updateActivity(sessionId_);
-        }
-      } catch (const std::exception &e) {
-        LOG_WARN("Heartbeat received (unknown source)");
+      } break;
+      case PacketType::PAIRING_REQUEST:
+        handlePairingRequest(ProtocolParser::parsePayload(packet));
+        break;
+      case PacketType::METADATA:
+        handleMetadata(ProtocolParser::parsePayload(packet));
+        break;
+      case PacketType::FILE_CHUNK:
+        handleFileChunk(packet.payload);
+        break;
+      case PacketType::TRANSFER_COMPLETE:
+        handleTransferComplete(ProtocolParser::parsePayload(packet));
+        break;
+      default:
+        LOG_WARN("Unknown V1 packet type");
+        break;
       }
-    } break;
-    case PacketType::PAIRING_REQUEST:
-      handlePairingRequest(ProtocolParser::parsePayload(packet));
-      break;
-    case PacketType::METADATA:
-      handleMetadata(ProtocolParser::parsePayload(packet));
-      break;
-    case PacketType::FILE_CHUNK:
-      handleFileChunk(packet.payload);
-      break;
-    case PacketType::TRANSFER_COMPLETE:
-      handleTransferComplete(ProtocolParser::parsePayload(packet));
-      break;
-    default:
-      LOG_WARN("Unknown packet type received");
+    } else if (packet.header.version == PROTOCOL_VERSION_2) {
+      PacketTypeV2 type =
+          static_cast<PacketTypeV2>(static_cast<uint8_t>(packet.header.type));
+      switch (type) {
+      case PacketTypeV2::UPLOAD_INIT:
+        handleUploadInit(ProtocolParser::parsePayload(packet));
+        break;
+      case PacketTypeV2::UPLOAD_CHUNK:
+        handleUploadChunk(packet.payload, packet.header);
+        break;
+      case PacketTypeV2::UPLOAD_FINISH:
+        handleUploadFinish(ProtocolParser::parsePayload(packet));
+        break;
+      case PacketTypeV2::UPLOAD_ABORT:
+        handleUploadAbort(ProtocolParser::parsePayload(packet));
+        break;
+      default:
+        LOG_WARN("Unknown V2 packet type");
+        break;
+      }
     }
   } catch (const std::exception &e) {
     LOG_ERROR("Packet processing error: " + std::string(e.what()));
-    sendPacket(ProtocolParser::createErrorPacket("Processing error"));
+    sendPacket(ProtocolParser::createErrorPacket("Processing error",
+                                                 ErrorCode::PROTOCOL_ERROR));
   }
 
   // Continue loop
@@ -189,7 +262,8 @@ void Session::handlePairingRequest(const json &payload) {
       try {
         ConnectionManager::getInstance().addConnection(
             sessionId_, deviceId,
-            socket_.remote_endpoint().address().to_string(), userName);
+            socket_.lowest_layer().remote_endpoint().address().to_string(),
+            userName);
       } catch (...) {
         // ignore endpoint error
       }
@@ -201,15 +275,28 @@ void Session::handlePairingRequest(const json &payload) {
     sendPacket(
         ProtocolParser::createPairingResponse(-1, false, "Unauthorized"));
   }
-}
+} // End handlePairingRequest
 
 void Session::handleMetadata(const json &payload) {
   std::string filename = payload.value("filename", "");
   long long size = payload.value("size", 0LL);
   std::string hash = payload.value("hash", "");
+  // Extract Trace ID if present
+  if (payload.contains("traceId")) {
+    currentTraceId_ = payload["traceId"];
+  } else {
+    currentTraceId_ =
+        ""; // Reset for new file if not provided, or keep session?
+            // Better to reset or generate one if missing?
+            // For now, let's assume client sends it or we leave empty.
+  }
+
+  log("Received metadata for: " + filename + " (" + std::to_string(size) +
+      " bytes)");
 
   if (filename.empty()) {
-    sendPacket(ProtocolParser::createErrorPacket("Invalid filename"));
+    sendPacket(ProtocolParser::createErrorPacket("Invalid filename",
+                                                 ErrorCode::FILE_ERROR));
     return;
   }
 
@@ -225,10 +312,15 @@ void Session::handleMetadata(const json &payload) {
   meta.hash = hash;
 
   if (fileManager_.startUpload(meta, currentTempPath_)) {
+    // Check disk space (Simple check, 100MB buffer?)
+    // TODO: Implement proper disk check in Task 4
     sendPacket(ProtocolParser::createTransferReadyPacket(0));
     ConnectionManager::getInstance().updateStatus(sessionId_, "syncing");
+    log("Upload started: " + filename);
   } else {
-    sendPacket(ProtocolParser::createErrorPacket("Failed to prepare upload"));
+    log("Failed to prepare upload for " + filename, LogLevel::L_ERROR);
+    sendPacket(ProtocolParser::createErrorPacket("Failed to prepare upload",
+                                                 ErrorCode::FILE_ERROR));
   }
 }
 
@@ -243,8 +335,9 @@ void Session::handleFileChunk(const std::vector<char> &data) {
                                                     sessionBytes_);
     // Ack? No, usually stream optimization.
   } else {
-    LOG_ERROR("Write failed for " + currentTempPath_);
-    sendPacket(ProtocolParser::createErrorPacket("Write failed"));
+    log("Write failed for " + currentTempPath_, LogLevel::L_ERROR);
+    sendPacket(ProtocolParser::createErrorPacket(
+        "Write failed", ErrorCode::DISK_FULL)); // Assume disk full or IO error
   }
 }
 
@@ -257,18 +350,44 @@ void Session::handleTransferComplete(const json &payload) {
 
   std::string finalPath;
   if (fileManager_.finalizeUpload(currentTempPath_, meta, finalPath)) {
+    log("Photo saved: " + finalPath);
+
+    // EXIF Extraction
+    try {
+      std::ifstream file(finalPath, std::ios::binary);
+      if (file) {
+        std::vector<unsigned char> fileBuffer(
+            (std::istreambuf_iterator<char>(file)),
+            std::istreambuf_iterator<char>());
+        if (!fileBuffer.empty()) {
+          easyexif::EXIFInfo result;
+          int code = result.parseFrom(fileBuffer.data(), fileBuffer.size());
+          if (code == 0) {
+            meta.cameraMake = result.Make;
+            meta.cameraModel = result.Model;
+            meta.exposureTime = result.ExposureTime;
+            meta.fNumber = result.FNumber;
+            meta.iso = result.ISOSpeedRatings;
+            meta.focalLength = result.FocalLength;
+            meta.gpsLat = result.GeoLocation.Latitude;
+            meta.gpsLon = result.GeoLocation.Longitude;
+            meta.gpsAlt = result.GeoLocation.Altitude;
+            meta.takenAt = result.DateTimeOriginal;
+            LOG_INFO("EXIF extracted for " + meta.filename);
+          }
+        }
+      }
+    } catch (const std::exception &e) {
+      LOG_ERROR("EXIF extraction failed: " + std::string(e.what()));
+    }
+
+    // Update DB with metadata
     db_.insertPhoto(clientId_, meta, finalPath);
     db_.updateClientLastSeen(clientId_);
-    sendPacket(ProtocolParser::createTransferCompletePacket(currentFileHash_));
-
-    sessionPhotos_++;
-    ConnectionManager::getInstance().updateProgress(sessionId_, sessionPhotos_,
-                                                    sessionBytes_);
-    ConnectionManager::getInstance().updateStatus(sessionId_, "idle");
-
-    LOG_INFO("Photo saved: " + finalPath);
   } else {
-    sendPacket(ProtocolParser::createErrorPacket("Finalization failed"));
+    log("Finalization failed", LogLevel::L_ERROR);
+    sendPacket(ProtocolParser::createErrorPacket("Finalization failed",
+                                                 ErrorCode::FILE_ERROR));
   }
 
   currentTempPath_.clear();
@@ -276,20 +395,222 @@ void Session::handleTransferComplete(const json &payload) {
 
 // --- TcpListener ---
 
-TcpListener::TcpListener(boost::asio::io_context &io_context, int port,
+TcpListener::TcpListener(boost::asio::io_context &io_context,
+                         boost::asio::ssl::context &context, int port,
                          DatabaseManager &db, FileManager &fileManager)
-    : acceptor_(io_context, tcp::endpoint(tcp::v4(), port)), db_(db),
-      fileManager_(fileManager) {
+    : acceptor_(io_context, tcp::endpoint(tcp::v4(), port)), context_(context),
+      db_(db), fileManager_(fileManager) {
   doAccept();
 }
 
 void TcpListener::doAccept() {
-  acceptor_.async_accept([this](boost::system::error_code ec,
-                                tcp::socket socket) {
-    if (!ec) {
-      std::make_shared<Session>(std::move(socket), db_, fileManager_)->start();
+  acceptor_.async_accept(
+      [this](boost::system::error_code ec, tcp::socket socket) {
+        if (!ec) {
+          boost::asio::ssl::stream<tcp::socket> ssl_stream(std::move(socket),
+                                                           context_);
+          std::make_shared<Session>(std::move(ssl_stream), db_, fileManager_)
+              ->start();
+        }
+
+        doAccept();
+      });
+}
+
+// Phase 2: Resumable Upload Handlers
+
+void Session::handleUploadInit(const json &payload) {
+  if (clientId_ == -1) {
+    sendPacket(ProtocolParser::createErrorPacket("Unauthorized",
+                                                 ErrorCode::AUTH_REQUIRED));
+    return;
+  }
+
+  std::string filename = payload["filename"];
+  long long fileSize = payload["size"];
+  std::string fileHash = payload["hash"];
+
+  // 1. Check DB for existing session (Resume Reconciliation)
+  UploadSession session =
+      db_.getUploadSessionByHash(clientId_, fileHash, fileSize);
+
+  if (!session.uploadId.empty()) {
+    // Found session, reconcile with filesystem
+    long long actualBytes = fileManager_.getFileSize(
+        fileManager_.getUploadTempPath(session.uploadId));
+
+    if (actualBytes != session.receivedBytes) {
+      log("Reconciling session bytes from " +
+          std::to_string(session.receivedBytes) + " to " +
+          std::to_string(actualBytes));
+      // Trust filesystem
+      db_.updateSessionReceivedBytes(session.uploadId, actualBytes);
+      session.receivedBytes = actualBytes;
     }
 
-    doAccept();
-  });
+    log("Resuming upload session: " + session.uploadId + " at offset " +
+        std::to_string(session.receivedBytes));
+    sendPacket(ProtocolParser::createUploadAckPacket(
+        session.uploadId, 1024 * 1024, session.receivedBytes,
+        "RESUMING")); // 1MB chunk hint
+    return;
+  }
+
+  // 2. Create new session
+  // Check disk space
+  if (!fileManager_.hasSpaceAvailable(fileSize)) {
+    sendPacket(
+        ProtocolParser::createErrorPacket("Disk Full", ErrorCode::DISK_FULL));
+    return;
+  }
+
+  std::string uploadId =
+      db_.createUploadSession(clientId_, fileHash, filename, fileSize);
+  if (uploadId.empty()) {
+    sendPacket(ProtocolParser::createErrorPacket("Database Error",
+                                                 ErrorCode::DATABASE_ERROR));
+    return;
+  }
+
+  log("Created new upload session: " + uploadId);
+  sendPacket(
+      ProtocolParser::createUploadAckPacket(uploadId, 1024 * 1024, 0, "NEW"));
+}
+
+void Session::handleUploadChunk(const std::vector<char> &data,
+                                const PacketHeader &header) {
+  if (data.size() < 44) { // 36 + 8
+    sendPacket(ProtocolParser::createErrorPacket("Invalid Chunk Header",
+                                                 ErrorCode::INVALID_PAYLOAD));
+    return;
+  }
+
+  std::string uploadId(data.data(), 36);
+  long long offset = 0;
+  // memcpy needed for alignment safety
+  std::memcpy(&offset, data.data() + 36, sizeof(long long));
+  offset = fromNetworkOrder(offset); // Wait, assume Network Order (Big Endian)
+                                     // wrapper exists or use manual swap
+
+  const char *chunkData = data.data() + 44;
+  size_t chunkLen = data.size() - 44;
+
+  UploadSession session = db_.getUploadSession(uploadId);
+  if (session.uploadId.empty()) {
+    sendPacket(ProtocolParser::createErrorPacket("Session Not Found",
+                                                 ErrorCode::SESSION_EXPIRED));
+    return;
+  }
+
+  if (session.clientId != clientId_) {
+    sendPacket(ProtocolParser::createErrorPacket("Unauthorized Session",
+                                                 ErrorCode::AUTH_FAILED));
+    return;
+  }
+
+  if (offset < session.receivedBytes) {
+    log("Ignoring duplicate chunk for " + uploadId + " offset " +
+        std::to_string(offset));
+    sendPacket(ProtocolParser::createUploadChunkAckPacket(
+        uploadId, session.receivedBytes, "OK"));
+    return;
+  }
+
+  if (offset > session.receivedBytes) {
+    log("Offset gap for " + uploadId + ". Expected " +
+        std::to_string(session.receivedBytes) + " got " +
+        std::to_string(offset));
+    sendPacket(ProtocolParser::createErrorPacket("Invalid Offset",
+                                                 ErrorCode::INVALID_OFFSET));
+    return;
+  }
+
+  std::vector<char> chunk(chunkData, chunkData + chunkLen);
+  if (!fileManager_.appendChunk(uploadId, chunk)) {
+    sendPacket(ProtocolParser::createErrorPacket("Write Failed",
+                                                 ErrorCode::FILE_ERROR));
+    return;
+  }
+
+  long long newTotal = session.receivedBytes + chunkLen;
+  db_.updateSessionReceivedBytes(uploadId, newTotal);
+  sendPacket(
+      ProtocolParser::createUploadChunkAckPacket(uploadId, newTotal, "OK"));
+}
+
+void Session::handleUploadFinish(const json &payload) {
+  std::string uploadId = payload["uploadId"];
+  std::string sha256 = payload["sha256"];
+
+  UploadSession session = db_.getUploadSession(uploadId);
+  if (session.uploadId.empty() || session.clientId != clientId_) {
+    sendPacket(ProtocolParser::createErrorPacket("Invalid Session",
+                                                 ErrorCode::SESSION_EXPIRED));
+    return;
+  }
+
+  if (session.receivedBytes != session.fileSize) {
+    sendPacket(ProtocolParser::createUploadResultPacket(uploadId, "ERROR",
+                                                        "Incomplete Upload"));
+    return;
+  }
+
+  std::string extension = fs::path(session.filename).extension().string();
+  std::string finalPath =
+      fileManager_.getPhotoPath(session.fileHash, extension);
+
+  if (fileManager_.photoExists(session.fileHash)) {
+    // Deduplication: File exists, retain session for forensics but delete temp
+    // file
+    db_.completeUploadSession(uploadId);
+    fs::remove(fileManager_.getUploadTempPath(uploadId));
+
+    PhotoMetadata metadata;
+    metadata.filename = session.filename;
+    metadata.size = session.fileSize;
+    metadata.hash = session.fileHash;
+    metadata.receivedAt = db_.getCurrentTimestamp();
+    db_.insertPhoto(clientId_, metadata);
+
+    sendPacket(ProtocolParser::createUploadResultPacket(uploadId, "SUCCESS",
+                                                        "File Exists"));
+    return;
+  }
+
+  std::string tempPath = fileManager_.getUploadTempPath(uploadId);
+  std::string computedHash = FileManager::calculateSHA256(tempPath);
+  if (computedHash != sha256) {
+    log("Hash mismatch for " + uploadId + ". Expected " + sha256 + " got " +
+        computedHash);
+    sendPacket(ProtocolParser::createErrorPacket("Hash Mismatch",
+                                                 ErrorCode::HASH_MISMATCH));
+    return;
+  }
+
+  if (!fileManager_.finalizeFile(uploadId, finalPath)) {
+    sendPacket(ProtocolParser::createUploadResultPacket(uploadId, "ERROR",
+                                                        "Finalization Failed"));
+    return;
+  }
+
+  PhotoMetadata metadata;
+  metadata.filename = session.filename;
+  metadata.size = session.fileSize;
+  metadata.hash = session.fileHash;
+  metadata.receivedAt = db_.getCurrentTimestamp();
+  db_.insertPhoto(clientId_, metadata);
+  db_.completeUploadSession(uploadId);
+
+  sendPacket(ProtocolParser::createUploadResultPacket(uploadId, "SUCCESS",
+                                                      "Upload Complete"));
+}
+
+void Session::handleUploadAbort(const json &payload) {
+  std::string uploadId = payload["uploadId"];
+  // Verify ownership
+  UploadSession session = db_.getUploadSession(uploadId);
+  if (session.clientId == clientId_) {
+    db_.deleteUploadSession(uploadId);
+    fs::remove(fileManager_.getUploadTempPath(uploadId));
+  }
 }

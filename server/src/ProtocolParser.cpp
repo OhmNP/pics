@@ -72,6 +72,15 @@ ProtocolParser::deserializePacketHeader(const std::vector<char> &headerData) {
   ptr += sizeof(len);
   packet.header.payloadLength = fromNetworkOrder(len);
 
+  // Validate Header
+  if (packet.header.magic != PROTOCOL_MAGIC) {
+    throw std::runtime_error("Invalid Protocol Magic");
+  }
+  if (packet.header.version != PROTOCOL_VERSION &&
+      packet.header.version != PROTOCOL_VERSION_2) {
+    throw std::runtime_error("Unsupported Protocol Version");
+  }
+
   return packet;
 }
 
@@ -131,9 +140,11 @@ ProtocolParser::createTransferCompletePacket(const std::string &fileHash) {
   return createJsonPacket(PacketType::TRANSFER_COMPLETE, j);
 }
 
-Packet ProtocolParser::createErrorPacket(const std::string &message) {
+Packet ProtocolParser::createErrorPacket(const std::string &message,
+                                         ErrorCode code) {
   json j;
   j["error"] = message;
+  j["code"] = static_cast<int>(code);
   return createJsonPacket(PacketType::PROTOCOL_ERROR, j);
 }
 
@@ -146,4 +157,52 @@ json ProtocolParser::parsePayload(const Packet &packet) {
   } catch (...) {
     return json({});
   }
+}
+
+// Phase 2 Implementation
+static Packet createJsonPacketV2(PacketTypeV2 type, const json &j) {
+  Packet p;
+  p.header.magic = PROTOCOL_MAGIC;
+  p.header.version = PROTOCOL_VERSION_2;
+  // Dangerous cast but PacketHeader.type is PacketType(uint8)
+  // We should ideally change PacketHeader to use raw uint8 defined type
+  // For now, static_cast to PacketType works because they are both uint8 backed
+  p.header.type = static_cast<PacketType>(static_cast<uint8_t>(type));
+
+  std::string s = j.dump();
+  p.payload.assign(s.begin(), s.end());
+  p.header.payloadLength = (uint32_t)p.payload.size();
+  return p;
+}
+
+Packet ProtocolParser::createUploadAckPacket(const std::string &uploadId,
+                                             int chunkSize,
+                                             long long receivedBytes,
+                                             const std::string &status) {
+  json j;
+  j["uploadId"] = uploadId;
+  j["chunkSize"] = chunkSize;
+  j["receivedBytes"] = receivedBytes;
+  j["status"] = status;
+  return createJsonPacketV2(PacketTypeV2::UPLOAD_ACK, j);
+}
+
+Packet ProtocolParser::createUploadChunkAckPacket(const std::string &uploadId,
+                                                  long long nextExpectedOffset,
+                                                  const std::string &status) {
+  json j;
+  j["uploadId"] = uploadId;
+  j["nextExpectedOffset"] = nextExpectedOffset;
+  j["status"] = status;
+  return createJsonPacketV2(PacketTypeV2::UPLOAD_CHUNK_ACK, j);
+}
+
+Packet ProtocolParser::createUploadResultPacket(const std::string &uploadId,
+                                                const std::string &status,
+                                                const std::string &message) {
+  json j;
+  j["uploadId"] = uploadId;
+  j["status"] = status;
+  j["message"] = message;
+  return createJsonPacketV2(PacketTypeV2::UPLOAD_RESULT, j);
 }

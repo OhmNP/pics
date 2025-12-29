@@ -5,13 +5,12 @@
 #include <mutex>
 #include <string>
 
-
 // Undefine Windows macros that conflict with our enum
 #ifdef ERROR
 #undef ERROR
 #endif
 
-enum class LogLevel { DEBUG, INFO, WARN, ERROR, FATAL };
+enum class LogLevel { L_DEBUG, L_INFO, L_WARN, L_ERROR, L_FATAL };
 
 class Logger {
 public:
@@ -26,6 +25,10 @@ public:
   void error(const std::string &message);
   void fatal(const std::string &message);
 
+  // Trace ID overloaded helpers
+  void logWithTrace(LogLevel level, const std::string &traceId,
+                    const std::string &message);
+
 private:
   Logger() = default;
   ~Logger();
@@ -37,7 +40,7 @@ private:
   std::string getCurrentTimestamp();
 
   std::ofstream logFile_;
-  LogLevel minLevel_ = LogLevel::INFO;
+  LogLevel minLevel_ = LogLevel::L_INFO;
   bool consoleOutput_ = true;
   std::mutex mutex_;
 };

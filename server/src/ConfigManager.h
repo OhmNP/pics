@@ -28,6 +28,18 @@ public:
   int getMaxFailedAttempts() const;
   int getLockoutDurationMinutes() const;
 
+  // Maintenance
+  int getCleanupIntervalSeconds() const;
+
+  // Phase 3: Integrity & Retention
+  int getIntegrityScanInterval() const;
+  bool getIntegrityVerifyHash() const;
+  int getIntegrityMissingCheckInterval() const;
+  int getIntegrityOrphanSampleInterval() const;
+  int getIntegrityFullScanInterval() const;
+  int getIntegrityOrphanSampleSize() const;
+  int getDeletedRetentionDays() const;
+
 private:
   ConfigManager() = default;
   ConfigManager(const ConfigManager &) = delete;
