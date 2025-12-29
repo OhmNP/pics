@@ -1,6 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Box, Typography, Grid, Card, CardMedia, CardContent, TextField, Select, MenuItem, FormControl, InputLabel, Chip, CircularProgress, Skeleton } from '@mui/material';
-import { api, MediaItem } from '../services/api';
+import { api, MediaItem, Client } from '../services/api';
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll';
 import MediaViewer from './MediaViewer';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
@@ -29,6 +29,33 @@ export default function Photos() {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedPhoto, setSelectedPhoto] = useState<MediaItem | null>(null);
     const [viewerOpen, setViewerOpen] = useState(false);
+    const [clients, setClients] = useState<Client[]>([]);
+
+    useEffect(() => {
+        const fetchClients = async () => {
+            try {
+                const response = await api.getClients();
+                // Check if response.data is the array or if it's wrapped in { clients: [] }
+                // Based on ApiServer.cpp: json response = {{"clients", clientsJson}};
+                // So response.data should have a .clients property?
+                // Wait, let's verify ApiServer.cpp output format again.
+                // ApiServer.cpp: json response = {{"clients", clientsJson}}; return response.dump();
+                // Yes, it returns an object with "clients" key.
+                // However, without fully typing the response of api.getClients in api.ts, I should be careful.
+                // Let's assume response.data.clients if it exists, or response.data if it's an array.
+                // Actually, let's just properly type it in api.ts or cast it here.
+                const data = response.data as any;
+                if (data.clients && Array.isArray(data.clients)) {
+                    setClients(data.clients);
+                } else if (Array.isArray(data)) {
+                    setClients(data);
+                }
+            } catch (err) {
+                console.error("Error fetching clients:", err);
+            }
+        };
+        fetchClients();
+    }, []);
 
     const fetchPhotos = useCallback(async (offset: number, limit: number) => {
         const response = await api.getMedia(offset, limit, clientFilter >= 0 ? clientFilter : undefined, undefined, undefined, searchTerm);
@@ -109,8 +136,11 @@ export default function Photos() {
                         label="Client"
                     >
                         <MenuItem value={-1}>All Clients</MenuItem>
-                        <MenuItem value={1}>Client 1</MenuItem>
-                        <MenuItem value={2}>Client 2</MenuItem>
+                        {clients.map((client) => (
+                            <MenuItem key={client.id} value={client.id}>
+                                {client.name}
+                            </MenuItem>
+                        ))}
                     </Select>
                 </FormControl>
             </Box>

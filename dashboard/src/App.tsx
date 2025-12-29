@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
@@ -12,11 +12,18 @@ import Photos from './components/Photos';
 import Clients from './components/Clients';
 import ClientDetails from './components/ClientDetails';
 import Sessions from './components/Sessions';
+import Errors from './components/Errors';
+import Changes from './components/Changes';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import DnsIcon from '@mui/icons-material/Dns';
+import GppGoodIcon from '@mui/icons-material/GppGood'; // Integrity Icon
 
 
+import StoragePage from './components/Storage';
 import Settings from './components/Settings';
 import Login from './components/Login';
 import ProtectedRoute from './components/ProtectedRoute';
+import Integrity from './components/Integrity'; // Import Integrity component
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 
 // Create a dark theme instance to ensure MUI components play nice with our custom CSS
@@ -40,6 +47,9 @@ const navItems: NavItem[] = [
     { text: 'Photos', icon: <PhotoLibraryIcon />, path: '/photos' },
     { text: 'Clients', icon: <PeopleIcon />, path: '/clients' },
     { text: 'Sessions', icon: <SyncIcon />, path: '/sessions' },
+    { text: 'Storage', icon: <DnsIcon />, path: '/storage' },
+    { text: 'Integrity', icon: <GppGoodIcon />, path: '/integrity' }, // Added Integrity
+    { text: 'Errors', icon: <WarningAmberIcon />, path: '/errors' },
     { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
 ];
 
@@ -177,7 +187,12 @@ function AppContent() {
                         <Route path="/clients" element={<Clients />} />
                         <Route path="/clients/:id" element={<ClientDetails />} />
                         <Route path="/sessions" element={<Sessions />} />
+                        <Route path="/storage" element={<StoragePage />} />
+                        <Route path="/integrity" element={<Integrity />} /> {/* Added Integrity route */}
+                        <Route path="/errors" element={<Errors />} />
+                        <Route path="/changes" element={<Changes />} /> {/* Added Changes route */}
                         <Route path="/settings" element={<Settings />} />
+                        <Route path="*" element={<Navigate to="/" replace />} /> {/* Added catch-all route */}
                     </Routes>
                 </div>
             </main>

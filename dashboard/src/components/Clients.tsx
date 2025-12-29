@@ -16,6 +16,9 @@ interface Client {
     photoCount: number;
     storageUsed: number;
     isOnline: boolean;
+
+    uploads24h?: number;
+    failures24h?: number;
     currentSession?: {
         progress: number;
         total: number;
@@ -70,6 +73,20 @@ export default function Clients() {
     // ... (existing imports)
 
     // ... (inside ClientCard)
+    const handleRevoke = async (e: React.MouseEvent, id: number) => {
+        e.stopPropagation();
+        if (window.confirm('Revoke access for this client? This will invalidate its session token. To delete data, use Remove.')) {
+            try {
+                await api.revokeClient(id);
+                alert('Client access revoked.');
+                // Maybe refresh list to show status change if we tracked it
+            } catch (err) {
+                console.error('Failed to revoke client:', err);
+                alert('Failed to revoke client access');
+            }
+        }
+    };
+
     const handleDelete = async (e: React.MouseEvent, id: number) => {
         e.stopPropagation();
         if (window.confirm('Are you sure you want to remove this device? This will delete all its metadata from the server.')) {
@@ -137,6 +154,12 @@ export default function Clients() {
                                 <Typography variant="body2" color="text.secondary">
                                     Storage: <strong>{formatBytes(client.storageUsed)}</strong>
                                 </Typography>
+                                <Typography variant="body2" color="text.secondary">
+                                    Uploads (24h): <strong>{client.uploads24h || 0}</strong>
+                                </Typography>
+                                <Typography variant="body2" color={client.failures24h ? "error.main" : "text.secondary"}>
+                                    Failures (24h): <strong>{client.failures24h || 0}</strong>
+                                </Typography>
                             </Box>
 
                             {client.currentSession && (
@@ -164,6 +187,14 @@ export default function Clients() {
                     </Box>
 
                     <Box display="flex" gap={1}>
+                        <Button
+                            size="small"
+                            color="warning"
+                            variant="text"
+                            onClick={(e) => handleRevoke(e, client.id)}
+                        >
+                            Revoke
+                        </Button>
                         <IconButton
                             size="small"
                             color="error"

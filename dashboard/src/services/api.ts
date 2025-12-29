@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:50506/api';
+const API_BASE = 'https://localhost:50506/api';
 
 // Add request interceptor to include auth token
 axios.interceptors.request.use((config) => {
@@ -89,6 +89,41 @@ export interface MediaResponse {
     };
 }
 
+export interface Client {
+    id: number;
+    deviceId: string;
+    name: string;
+    lastSeen: string;
+    photoCount: number;
+    storageUsed: number;
+    isOnline: boolean;
+    currentSession?: {
+        progress: number;
+        total: number;
+    };
+}
+
+export interface Session {
+    id: number;
+    clientId: number;
+    deviceId: string;
+    clientName: string;
+    startedAt: string;
+    endedAt: string;
+    photosReceived: number;
+    status: string;
+}
+
+export interface SessionsResponse {
+    sessions: Session[];
+    pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        pages: number;
+    };
+}
+
 export const api = {
     // Authentication
     login: (username: string, password: string) =>
@@ -104,6 +139,7 @@ export const api = {
     getClients: () => axios.get(`${API_BASE}/clients`),
     getClientDetails: (id: number) => axios.get(`${API_BASE}/clients/${id}`).then((res) => res.data),
     deleteClient: (id: number) => axios.delete(`${API_BASE}/clients/${id}`).then((res) => res.data),
+    revokeClient: (id: number) => axios.post(`${API_BASE}/devices/${id}/revoke`).then((res) => res.data),
     getSessions: (page = 1, limit = 10, clientId = "", status = "") => axios.get(`${API_BASE}/sessions`, { params: { page, limit } }),
     getConfig: () => axios.get<ServerConfig>(`${API_BASE}/config`),
     updateConfig: (config: Partial<ServerConfig>) => axios.post(`${API_BASE}/config`, config),
@@ -112,4 +148,86 @@ export const api = {
 
     // System
     getNetworkInfo: () => axios.get<{ ips: string[], port: number }>(`${API_BASE}/network`),
+
+    // Phase 6: Operations
+    getErrors: (limit = 50, offset = 0, level = "", deviceId = "", since = "") =>
+        axios.get<ErrorsResponse>(`${API_BASE}/errors`, { params: { limit, offset, level, deviceId, since } }),
+    getIntegrityStatus: () => axios.get<IntegrityReport>(`${API_BASE}/integrity`),
+    getIntegrityDetails: (type: string, limit = 50) => axios.get<IntegrityDetailsResponse>(`${API_BASE}/integrity/details`, { params: { type, limit } }),
+    getTopFiles: () => axios.get<TopFilesResponse>(`${API_BASE}/top-files`),
+    getHealth: () => axios.get<HealthStats>(`${API_BASE}/health`),
+    getChanges: (params: { cursor?: string, limit?: number } = {}) => axios.get<ChangesResponse>(`${API_BASE}/changes`, { params }),
 };
+
+export interface ChangeRecord {
+    change_id: number;
+    op: string;
+    media_id: number;
+    blob_hash: string;
+    changed_at: string;
+    filename: string;
+    device_id: string;
+}
+
+export interface ChangesResponse {
+    changes: ChangeRecord[];
+    next_cursor: string;
+    has_more: boolean;
+}
+
+export interface FileAnalysis {
+    id: number;
+    filename: string;
+    mimeType: string;
+    size: number;
+    originalPath: string;
+}
+
+export interface TopFilesResponse {
+    topFiles: FileAnalysis[];
+}
+
+export interface ErrorLog {
+    id: number;
+    code: number;
+    message: string;
+    traceId: string;
+    timestamp: string;
+    severity?: string;
+    deviceId?: string;
+    context?: string;
+}
+
+export interface ErrorsResponse {
+    errors: ErrorLog[];
+}
+
+export interface IntegrityReport {
+    status: string;
+    lastScan: string;
+    totalPhotos: number;
+    missingBlobs: number;
+    corruptBlobs: number;
+    orphanBlobs: number;
+    tombstones: number;
+    message?: string;
+}
+
+export interface HealthStats {
+    uptime: number;
+    version: string;
+    diskFree: number;
+    diskTotal: number;
+    dbSize: number;
+    pendingUploads: number;
+    failedUploads: number;
+    activeSessions: number;
+    lastIntegrityScan: string;
+    integrityIssues: number;
+}
+
+export interface IntegrityDetailsResponse {
+    type: string;
+    items: string[];
+}
+

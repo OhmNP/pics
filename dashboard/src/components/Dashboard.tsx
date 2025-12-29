@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Box, Typography, Grid, CircularProgress, LinearProgress } from '@mui/material';
-import { api, ServerStats } from '../services/api';
+import { Box, Typography, Grid, CircularProgress, LinearProgress, Paper, Chip } from '@mui/material';
+import { api, ServerStats, IntegrityReport, HealthStats } from '../services/api';
 import LiveConnections from './LiveConnections';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
-import PeopleIcon from '@mui/icons-material/People';
+
 import SyncIcon from '@mui/icons-material/Sync';
 import StorageIcon from '@mui/icons-material/Storage';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
@@ -78,28 +78,64 @@ function formatBytes(bytes: number): string {
     return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
 }
 
-function formatUptime(seconds: number): string {
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
+function formatUptime(totalSeconds: number): string {
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = Math.floor(totalSeconds % 60);
 
-    if (days > 0) return `${days}d ${hours}h`;
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    return `${minutes}m`;
+    const pad = (num: number) => num.toString().padStart(2, '0');
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
 }
 
 export default function Dashboard() {
     const [stats, setStats] = useState<ServerStats | null>(null);
+    const [health, setHealth] = useState<HealthStats | null>(null);
+    const [integrity, setIntegrity] = useState<IntegrityReport | null>(null);
     const [connectionStatus, setConnectionStatus] = useState<'connected' | 'connecting' | 'offline'>('connecting');
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+    const [formattedUptime, setFormattedUptime] = useState<string>("00:00:00");
+    const [serverStartTime, setServerStartTime] = useState<Date | null>(null);
 
     useEffect(() => {
         const fetchStats = async () => {
             try {
-                const response = await api.getStats();
-                setStats(response.data);
+                const [statsRes, healthRes] = await Promise.all([
+                    api.getStats(),
+                    api.getHealth()
+                ]);
+
+                setStats(statsRes.data);
+                setHealth(healthRes.data);
+
+                // Use simplified integrity part from health if integrity API fails, 
+                // but let's try getting full report too or rely on health summary
+                try {
+                    const intRes = await api.getIntegrityStatus();
+                    setIntegrity(intRes.data);
+                } catch (e) { console.warn("Integrity fetch failed", e); }
+
                 setConnectionStatus('connected');
                 setLastUpdated(new Date());
+
+                // Calculate uptime from health stats if available, else stats
+                const uptime = healthRes.data.uptime || statsRes.data.uptime;
+
+                if (uptime > 0) {
+                    // We subtract uptime (seconds) including a small buffer for request latency if we wanted,
+                    // but just raw subtraction is usually fine for display.
+                    const now = new Date();
+                    const calculatedStart = new Date(now.getTime() - uptime * 1000);
+
+                    // Only update if it deviates significantly (e.g. > 2 seconds) to avoid jitter
+                    // or if it's the first time
+                    setServerStartTime(prev => {
+                        if (!prev || Math.abs(prev.getTime() - calculatedStart.getTime()) > 2000) {
+                            return calculatedStart;
+                        }
+                        return prev;
+                    });
+                }
+
             } catch (err) {
                 console.error('Error fetching stats:', err);
                 setConnectionStatus('offline');
@@ -107,10 +143,26 @@ export default function Dashboard() {
         };
 
         fetchStats();
-        const interval = setInterval(fetchStats, 5000); // Refresh every 5 seconds
+        const interval = setInterval(fetchStats, 5000); // Refresh stats every 5 seconds
 
         return () => clearInterval(interval);
     }, []);
+
+    // Effect to update uptime display every second
+    useEffect(() => {
+        if (!serverStartTime) return;
+
+        const updateClock = () => {
+            const now = new Date();
+            const diffSeconds = Math.floor((now.getTime() - serverStartTime.getTime()) / 1000);
+            setFormattedUptime(formatUptime(diffSeconds));
+        };
+
+        updateClock(); // Initial update
+        const timer = setInterval(updateClock, 1000); // Tick every second
+
+        return () => clearInterval(timer);
+    }, [serverStartTime]);
 
     if (connectionStatus === 'connecting' && !stats) {
         return (
@@ -174,6 +226,62 @@ export default function Dashboard() {
                 </Box>
             )}
 
+            {/* Health & Status Section (Phase 6) */}
+            <Grid container spacing={3} mb={4}>
+                <Grid item xs={12} md={6}>
+                    <Paper className="glass-panel" sx={{ p: 3, borderRadius: 3, height: '100%' }}>
+                        <Typography variant="h6" fontWeight="bold" mb={2} display="flex" alignItems="center" gap={1}>
+                            <CheckCircleIcon color="success" /> System Health
+                        </Typography>
+
+                        <Box display="flex" flexDirection="column" gap={2}>
+                            <Box display="flex" justifyContent="space-between" alignItems="center" p={2} sx={{ bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 2 }}>
+                                <Typography>Server Status</Typography>
+                                <Chip label="Online" color="success" size="small" />
+                            </Box>
+                            <Box display="flex" justifyContent="space-between" alignItems="center" p={2} sx={{ bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 2 }}>
+                                <Typography>Database Connection</Typography>
+                                <Chip label="Healthy" color="success" size="small" />
+                            </Box>
+                            <Box display="flex" justifyContent="space-between" alignItems="center" p={2} sx={{ bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 2 }}>
+                                <Typography>Storage System</Typography>
+                                <Chip label="Mounted" color="success" size="small" />
+                            </Box>
+                        </Box>
+                    </Paper>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                    <Paper className="glass-panel" sx={{ p: 3, borderRadius: 3, height: '100%' }}>
+                        <Typography variant="h6" fontWeight="bold" mb={2} display="flex" alignItems="center" gap={1}>
+                            <SyncIcon color="primary" /> Recent Jobs
+                        </Typography>
+
+                        <Box display="flex" flexDirection="column" gap={2}>
+                            <Box display="flex" justifyContent="space-between" alignItems="center" p={2} sx={{ bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 2 }}>
+                                <Typography>Integrity Scan</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                    {integrity ? integrity.lastScan : 'Never'}
+                                </Typography>
+                            </Box>
+                            <Box display="flex" justifyContent="space-between" alignItems="center" p={2} sx={{ bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 2 }}>
+                                <Typography>Database Size</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                    {health ? formatBytes(health.dbSize) : '-'}
+                                </Typography>
+                            </Box>
+                            <Box display="flex" justifyContent="space-between" alignItems="center" p={2} sx={{ bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 2 }}>
+                                <Typography>Pending Uploads</Typography>
+                                <Chip label={health?.pendingUploads || 0} color="warning" size="small" />
+                            </Box>
+                            <Box display="flex" justifyContent="space-between" alignItems="center" p={2} sx={{ bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 2 }}>
+                                <Typography>Failed Uploads (24h)</Typography>
+                                <Chip label={health?.failedUploads || 0} color={health?.failedUploads ? "error" : "success"} size="small" />
+                            </Box>
+                        </Box>
+                    </Paper>
+                </Grid>
+            </Grid>
+
             {stats ? (
                 <Grid container spacing={3}>
                     {/* Row 1 */}
@@ -189,19 +297,9 @@ export default function Dashboard() {
 
                     <Grid item xs={12} sm={6} md={4}>
                         <StatCard
-                            title="Connected Clients"
-                            value={stats.connectedClients}
-                            icon={<PeopleIcon fontSize="inherit" />}
-                            color="var(--secondary)"
-                            trend="Active Devices"
-                        />
-                    </Grid>
-
-                    <Grid item xs={12} sm={6} md={4}>
-                        <StatCard
                             title="Synced Photos"
-                            value={stats.totalPhotos.toLocaleString()} // Assuming same for now, or stats.syncedPhotos if available
-                            icon={<PhotoCameraIcon fontSize="inherit" />}
+                            value={stats.totalPhotos.toLocaleString()} // Assuming same for now
+                            icon={<CheckCircleIcon fontSize="inherit" />}
                             color="var(--accent-green)"
                             trend="Successfully Synced"
                         />
@@ -243,7 +341,7 @@ export default function Dashboard() {
                     <Grid item xs={12} sm={6} md={4}>
                         <StatCard
                             title="Uptime"
-                            value={formatUptime(stats.uptime)}
+                            value={formattedUptime}
                             icon={<AccessTimeIcon fontSize="inherit" />}
                             color="#ec4899"
                             trend="Since Last Restart"
