@@ -2,6 +2,7 @@ package com.photosync.android.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -13,6 +14,11 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.CloudUpload
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -43,6 +49,9 @@ fun GalleryScreen(
 ) {
     val lazyPagingItems = viewModel.pagedMedia.collectAsLazyPagingItems()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    
+    val isSelectionMode by viewModel.isSelectionMode.collectAsStateWithLifecycle()
+    val selectedIds by viewModel.selectedIds.collectAsStateWithLifecycle()
     
     // Media Viewer Overlay State
     var initialPage by remember { mutableStateOf<Int?>(null) }
@@ -98,22 +107,54 @@ fun GalleryScreen(
                                     }
                                 )
                             } else {
-                                NeonText(
-                                    text = "Gallery",
-                                    style = MaterialTheme.typography.headlineSmall
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (isSelectionMode) {
+                                        IconButton(onClick = { viewModel.clearSelection() }) {
+                                            Icon(Icons.Rounded.Close, "Cancel Selection", tint = TextPrimary)
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "${selectedIds.size} Selected",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = TextPrimary
+                                        )
+                                    } else {
+                                        NeonText(
+                                            text = "Gallery",
+                                            style = MaterialTheme.typography.headlineSmall
+                                        )
+                                    }
+                                }
                                 
-                                IconButton(
-                                    onClick = { isSearchExpanded = true },
-                                    modifier = Modifier
-                                        .clip(CircleShape)
-                                        .background(SurfaceVariant.copy(alpha = 0.3f))
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Search,
-                                        contentDescription = "Search",
-                                        tint = TextPrimary
-                                    )
+                                Row {
+                                    if (!isSelectionMode) {
+                                        IconButton(
+                                            onClick = { isSearchExpanded = true },
+                                            modifier = Modifier
+                                                .clip(CircleShape)
+                                                .background(SurfaceVariant.copy(alpha = 0.3f))
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Search,
+                                                contentDescription = "Search",
+                                                tint = TextPrimary
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
+                                    
+                                    Button(
+                                        onClick = { viewModel.toggleSelectionMode() },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isSelectionMode) Primary.copy(alpha = 0.2f) else SurfaceVariant.copy(alpha = 0.3f),
+                                            contentColor = if (isSelectionMode) Primary else TextPrimary
+                                        ),
+                                        contentPadding = PaddingValues(horizontal = 12.dp),
+                                        modifier = Modifier.height(40.dp),
+                                        shape = RoundedCornerShape(20.dp)
+                                    ) {
+                                        Text(if (isSelectionMode) "Done" else "Select")
+                                    }
                                 }
                             }
                         }
@@ -145,12 +186,77 @@ fun GalleryScreen(
                                  if (item != null) {
                                      PhotoGridItem(
                                          item = item,
-                                         onClick = { initialPage = index }
+                                         isSelected = selectedIds.contains(item.id),
+                                         isSelectionMode = isSelectionMode,
+                                         onClick = { 
+                                             if (isSelectionMode) {
+                                                 viewModel.toggleSelection(item.id)
+                                             } else {
+                                                 initialPage = index 
+                                             }
+                                         },
+                                         onLongClick = {
+                                             if (!isSelectionMode) {
+                                                 viewModel.toggleSelectionMode()
+                                                 viewModel.toggleSelection(item.id)
+                                             }
+                                         }
                                      )
                                  }
                              }
                          }
                      }
+                }
+            }
+
+            // --- Bottom Selection Bar ---
+            AnimatedVisibility(
+                visible = isSelectionMode,
+                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp, start = 16.dp, end = 16.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    color = Color.Black.copy(alpha = 0.9f),
+                    tonalElevation = 8.dp,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Primary.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .padding(horizontal = 24.dp, vertical = 12.dp)
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${selectedIds.size} items",
+                            color = TextPrimary,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            TextButton(onClick = { viewModel.clearSelection() }) {
+                                Text("Cancel", color = TextSecondary)
+                            }
+                            
+                            Button(
+                                onClick = { viewModel.uploadSelected() },
+                                enabled = selectedIds.isNotEmpty(),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Primary,
+                                    disabledContainerColor = SurfaceVariant.copy(alpha = 0.5f)
+                                )
+                            ) {
+                                Icon(Icons.Rounded.CloudUpload, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Upload")
+                            }
+                        }
+                    }
                 }
             }
 
@@ -191,7 +297,7 @@ fun GalleryScreen(
                             .padding(16.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.ArrowBack, // Changed to Default as AutoMirrored might need specific imports
+                            imageVector = Icons.Default.ArrowBack,
                             contentDescription = "Back",
                             tint = Color.White
                         )
@@ -202,25 +308,47 @@ fun GalleryScreen(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun PhotoGridItem(
     item: MediaItem, 
-    onClick: () -> Unit
+    isSelected: Boolean = false,
+    isSelectionMode: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier
             .aspectRatio(1f)
             .clip(RoundedCornerShape(8.dp))
             .background(SurfaceVariant)
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
     ) {
         AsyncImage(
             model = item.uri,
             contentDescription = item.name,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val scale = if (isSelected) 0.85f else 1f
+                    scaleX = scale
+                    scaleY = scale
+                },
             contentScale = ContentScale.Crop
         )
         
+        // Selection Overlay
+        if (isSelected) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Primary.copy(alpha = 0.3f))
+            )
+        }
+
         // Gradient Content Overlay
         Box(
             modifier = Modifier
@@ -228,42 +356,65 @@ fun PhotoGridItem(
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f)),
-                        startY = 150f // Start gradient lower down
+                        startY = 150f
                     )
                 )
         )
         
+        // --- Selection Indicator ---
+        if (isSelectionMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp)
+            ) {
+                if (isSelected) {
+                    Icon(
+                        imageVector = Icons.Rounded.CheckCircle,
+                        contentDescription = "Selected",
+                        tint = Primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.RadioButtonUnchecked,
+                        contentDescription = "Not Selected",
+                        tint = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+        }
+
         // --- Sync Status Dot ---
         val isSynced = item.syncStatus == SyncStatus.SYNCED
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(8.dp)
-                .size(8.dp)
-                .background(
-                    color = if (isSynced) Success else Color.Transparent, // Only show if synced? Or different color for pending? 
-                    // User Request: "add small green dot overlay for synced vs not synced status"
-                    // Usually this means Green for synced, maybe nothing or Gray for others.
-                    // Let's stick to Green for Synced.
-                    shape = CircleShape
-                )
-        ) {
-            // Include a border if it's not transparent to make it pop
-            if (isSynced) {
-                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Success, CircleShape)
-                        .graphicsLayer {
-                            shadowElevation = 4.dp.toPx()
-                            spotShadowColor = Success
-                            ambientShadowColor = Success
-                        }
-                 )
-            } else if (item.syncStatus == SyncStatus.FAILED) {
-                 Box(
-                    modifier = Modifier.size(8.dp).background(Error, CircleShape)
-                 )
+        if (!isSelectionMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .size(8.dp)
+                    .background(
+                        color = if (isSynced) Success else Color.Transparent, 
+                        shape = CircleShape
+                    )
+            ) {
+                if (isSynced) {
+                     Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Success, CircleShape)
+                            .graphicsLayer {
+                                shadowElevation = 4.dp.toPx()
+                                spotShadowColor = Success
+                                ambientShadowColor = Success
+                            }
+                     )
+                } else if (item.syncStatus == SyncStatus.FAILED) {
+                     Box(
+                        modifier = Modifier.size(8.dp).background(Error, CircleShape)
+                     )
+                }
             }
         }
 

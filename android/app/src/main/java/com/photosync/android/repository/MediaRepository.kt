@@ -236,4 +236,54 @@ class MediaRepository(
             }
         }
     }
+
+    /**
+     * Queue selected media items for manual upload
+     */
+    suspend fun queueManualUpload(mediaIds: List<String>) {
+        for (id in mediaIds) {
+            try {
+                val uri = ContentUris.withAppendedId(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    id.toLong()
+                )
+                
+                val existing = syncStatusDao.getSyncStatus(id)
+                
+                // If already synced, we might want to skip or re-calculate. 
+                // UX Req: "If item already SYNCED -> show “Already backed up” and skip (or mark as SYNCED without re-upload)"
+                // Actually, the easiest way to "re-queue" is to set it to PENDING.
+                // If it's already SYNCED on server, the dedupe in TcpSyncClient will skip it anyway.
+                
+                val hash = if (existing?.hash.isNullOrEmpty()) {
+                    calculateHash(uri)
+                } else {
+                    existing!!.hash
+                }
+                
+                // Reset errors and set to PENDING
+                syncStatusDao.insertSyncStatus(
+                    SyncStatusEntity(
+                        mediaId = id,
+                        hash = hash,
+                        syncStatus = SyncStatus.PENDING,
+                        retryCount = 0,
+                        lastAttemptTimestamp = System.currentTimeMillis()
+                    )
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("MediaRepository", "Failed to queue $id", e)
+            }
+        }
+        
+        // Trigger Sync via Service
+        val intent = android.content.Intent(context, com.photosync.android.service.EnhancedSyncService::class.java).apply {
+            action = com.photosync.android.service.EnhancedSyncService.ACTION_START_SYNC
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            context.startForegroundService(intent)
+        } else {
+            context.startService(intent)
+        }
+    }
 }

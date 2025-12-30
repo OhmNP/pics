@@ -45,12 +45,44 @@ std::string computeSHA256String(const std::string &str) {
 
 TEST_F(FileManagerTest, DirectoryInitialization) {
   // Instantiate FileManager
-  FileManager fm(testRoot, 1024 * 1024 * 100); // 100MB limit
+  FileManager fm(photosDir, tempDir, 1024 * 1024 * 100); // 100MB limit
   EXPECT_TRUE(fm.initialize());
 
   // Check if dirs created
   EXPECT_TRUE(fs::exists(photosDir));
   EXPECT_TRUE(fs::exists(tempDir));
+}
+
+TEST_F(FileManagerTest, TempCleanup) {
+  FileManager fm(photosDir, tempDir, 1024 * 1024);
+  fm.initialize();
+
+  std::string oldFile = tempDir + "/old_file.tmp";
+  std::string newFile = tempDir + "/new_file.tmp";
+  std::string noExtFile = tempDir + "/no_ext_file";
+
+  // Create files
+  {
+    std::ofstream(oldFile) << "old content";
+    std::ofstream(newFile) << "new content";
+    std::ofstream(noExtFile) << "no ext content";
+  }
+
+  // Manually set oldFile time to 48 hours ago
+  auto now = fs::file_time_type::clock::now();
+  auto twoDaysAgo = now - std::chrono::hours(48);
+  fs::last_write_time(oldFile, twoDaysAgo);
+
+  // Run cleanup (Age > 24h)
+  fm.cleanupTempFolder(24);
+
+  EXPECT_FALSE(fs::exists(oldFile));
+
+  // no_ext_file should have been renamed to no_ext_file.tmp
+  EXPECT_FALSE(fs::exists(noExtFile));
+  EXPECT_TRUE(fs::exists(noExtFile + ".tmp"));
+
+  EXPECT_TRUE(fs::exists(newFile));
 }
 
 TEST_F(FileManagerTest, ComputeSHA256) {
@@ -72,7 +104,7 @@ TEST_F(FileManagerTest, ComputeSHA256) {
 }
 
 TEST_F(FileManagerTest, ChunkWriting) {
-  FileManager fm(testRoot, 1024 * 1024);
+  FileManager fm(photosDir, tempDir, 1024 * 1024);
   fm.initialize();
 
   std::string tempFile = "temp_upload.part";
@@ -98,7 +130,7 @@ TEST_F(FileManagerTest, ChunkWriting) {
 }
 
 TEST_F(FileManagerTest, QuotaCheck) {
-  FileManager fm(testRoot, 1000); // 1000 bytes limit
+  FileManager fm(photosDir, tempDir, 1000); // 1000 bytes limit
   fm.initialize();
 
   EXPECT_TRUE(fm.hasSpaceAvailable(500));

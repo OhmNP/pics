@@ -9,43 +9,36 @@
 #include <thread>
 #include <vector>
 
-
-FileManager::FileManager(const std::string &storageDir,
-                         long long maxStorageBytes)
-    : storageDir_(storageDir), maxStorageBytes_(maxStorageBytes),
-      currentStorageUsed_(0) {}
+FileManager::FileManager(const std::string &photosDir,
+                         const std::string &tempDir, long long maxStorageBytes)
+    : photosDir_(photosDir), tempDir_(tempDir),
+      maxStorageBytes_(maxStorageBytes), currentStorageUsed_(0) {}
 
 FileManager::~FileManager() {}
 
 bool FileManager::initialize() {
-  // Create main storage directory
-  if (!ensureDirectoryExists(storageDir_)) {
-    LOG_ERROR("Failed to create storage directory: " + storageDir_);
+  // Create directories if they don't exist
+  if (!ensureDirectoryExists(photosDir_)) {
+    LOG_ERROR("Failed to create photos directory: " + photosDir_);
     return false;
   }
 
-  // Create subdirectories
-  if (!ensureDirectoryExists(getPhotosDir())) {
-    LOG_ERROR("Failed to create photos directory");
-    return false;
-  }
-
-  if (!ensureDirectoryExists(getTempDir())) {
-    LOG_ERROR("Failed to create temp directory");
+  if (!ensureDirectoryExists(tempDir_)) {
+    LOG_ERROR("Failed to create temp directory: " + tempDir_);
     return false;
   }
 
   // Calculate current storage usage
-  currentStorageUsed_ = calculateDirectorySize(getPhotosDir());
+  currentStorageUsed_ = calculateDirectorySize(photosDir_);
   LOG_INFO("Storage initialized. Current usage: " +
            std::to_string(currentStorageUsed_) + " bytes");
 
   return true;
 }
 
-std::string FileManager::getTempDir() { return storageDir_ + "/temp"; }
+std::string FileManager::getTempDir() { return tempDir_; }
 
-std::string FileManager::getPhotosDir() { return storageDir_ + "/photos"; }
+std::string FileManager::getPhotosDir() { return photosDir_; }
 
 bool FileManager::ensureDirectoryExists(const std::string &path) {
   try {
@@ -125,7 +118,7 @@ bool FileManager::hasSpaceAvailable(long long requiredBytes) {
 
 bool FileManager::checkDiskSpace(long long requiredBytes) {
   try {
-    std::filesystem::space_info si = std::filesystem::space(storageDir_);
+    std::filesystem::space_info si = std::filesystem::space(photosDir_);
     // Keep at least 500MB free
     long long minFree = 500 * 1024 * 1024;
     return si.available > (requiredBytes + minFree);
@@ -414,7 +407,7 @@ std::string FileManager::generatePhotoPath(const PhotoMetadata &metadata) {
 // Phase 2: Resumable Uploads
 
 std::string FileManager::getUploadTempPath(const std::string &uploadId) {
-  return getTempDir() + "/" + uploadId + ".part";
+  return getTempDir() + "/" + uploadId;
 }
 
 bool FileManager::appendChunk(const std::string &uploadId,
@@ -498,6 +491,60 @@ bool FileManager::deleteUploadSessionFiles(const std::string &uploadId) {
     LOG_ERROR("Error deleting upload session files: " + std::string(e.what()));
   }
   return false;
+}
+
+void FileManager::cleanupTempFolder(int maxAgeHours) {
+  std::lock_guard<std::mutex> lock(fileMutex_);
+  LOG_INFO("Starting global temp folder cleanup (Age > " +
+           std::to_string(maxAgeHours) + "h)");
+
+  try {
+    if (!std::filesystem::exists(tempDir_))
+      return;
+
+    auto now = std::filesystem::file_time_type::clock::now();
+    int count = 0;
+
+    for (const auto &entry : std::filesystem::directory_iterator(tempDir_)) {
+      if (!entry.is_regular_file())
+        continue;
+
+      auto ftime = entry.last_write_time();
+      auto age =
+          std::chrono::duration_cast<std::chrono::hours>(now - ftime).count();
+
+      bool hasExtension = entry.path().has_extension();
+
+      if (!hasExtension) {
+        // If it has no extension, we add .tmp so it's recognizable
+        // and can be cleaned up normally later if needed.
+        try {
+          std::filesystem::path newPath = entry.path();
+          newPath += ".tmp";
+          std::filesystem::rename(entry.path(), newPath);
+          LOG_INFO("Added .tmp extension to extensionless temp file: " +
+                   entry.path().filename().string());
+          continue; // Move to next file
+        } catch (...) {
+          // Ignore rename errors
+        }
+      }
+
+      if (age >= maxAgeHours) {
+        std::filesystem::remove(entry.path());
+        count++;
+        LOG_INFO("Cleaned up orphaned temp file: " +
+                 entry.path().filename().string());
+      }
+    }
+
+    if (count > 0) {
+      LOG_INFO("Temp cleanup finished. Removed " + std::to_string(count) +
+               " orphaned files.");
+    }
+  } catch (const std::exception &e) {
+    LOG_ERROR("Error during temp cleanup: " + std::string(e.what()));
+  }
 }
 
 std::vector<std::string> FileManager::getAllPhotoHashes(size_t limit) {

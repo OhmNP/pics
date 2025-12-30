@@ -2222,18 +2222,14 @@ std::string DatabaseManager::createUploadSession(int clientId,
     }
   }
 
-  // Calculate timestamps
-  std::string createdAt = getCurrentTimestamp();
-
-  // Expiry = 24 hours from now
-  std::string uuid = generatePairingToken(); // Reuse UUID generator
+  // Expiry is handled by SQL datetime('now', '+24 hours')
 
   sqlite3_stmt *stmt;
   const char *sql =
       "INSERT INTO upload_sessions (upload_id, client_id, "
       "file_hash, filename, file_size, created_at, expires_at, status) "
       "VALUES (?, ?, ?, ?, ?, datetime('now'), "
-      "datetime('now', '+1 hour'), 'PENDING')";
+      "datetime('now', '+24 hours'), 'PENDING')";
 
   if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
     LOG_ERROR("Failed to prepare createUploadSession: " +
@@ -2241,7 +2237,7 @@ std::string DatabaseManager::createUploadSession(int clientId,
     return "";
   }
 
-  sqlite3_bind_text(stmt, 1, uuid.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 1, uploadId.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_int(stmt, 2, clientId);
   sqlite3_bind_text(stmt, 3, fileHash.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(stmt, 4, filename.c_str(), -1, SQLITE_TRANSIENT);
@@ -2250,10 +2246,10 @@ std::string DatabaseManager::createUploadSession(int clientId,
   if (sqlite3_step(stmt) != SQLITE_DONE) {
     LOG_ERROR("Failed to insert upload session: " +
               std::string(sqlite3_errmsg(db_)));
-    uuid = "";
+    uploadId = "";
   }
   sqlite3_finalize(stmt);
-  return uuid;
+  return uploadId;
 }
 
 bool DatabaseManager::completeUploadSession(const std::string &uploadId) {

@@ -18,7 +18,8 @@ struct UploadProgress {
 
 class FileManager {
 public:
-  FileManager(const std::string &storageDir, long long maxStorageBytes);
+  FileManager(const std::string &photosDir, const std::string &tempDir,
+              long long maxStorageBytes);
   ~FileManager();
 
   // Initialize storage directories
@@ -60,6 +61,7 @@ public:
   // Delete photo file
   bool deletePhoto(const std::string &hash);
   bool deleteUploadSessionFiles(const std::string &uploadId);
+  void cleanupTempFolder(int maxAgeHours = 24);
 
   // Get file path for a hash
   std::string getPhotoPath(const std::string &hash,
@@ -77,7 +79,8 @@ public:
   std::vector<std::string> getAllPhotoHashes(size_t limit = 0); // 0 = unlimited
 
 private:
-  std::string storageDir_;
+  std::string photosDir_;
+  std::string tempDir_;
   long long maxStorageBytes_;
   std::atomic<long long> currentStorageUsed_;
   std::mutex fileMutex_;

@@ -103,7 +103,8 @@ int main(int argc, char *argv[]) {
   try {
     // Initialize file storage for photo transfer
     long long maxStorageBytes = config.getMaxStorageGB() * 1073741824LL;
-    FileManager fileManager(config.getPhotosDir(), maxStorageBytes);
+    FileManager fileManager(config.getPhotosDir(), config.getTempDir(),
+                            maxStorageBytes);
     if (!fileManager.initialize()) {
       LOG_FATAL("Failed to initialize file storage");
       return 1;
@@ -209,6 +210,9 @@ int main(int argc, char *argv[]) {
                        " soft-deleted photos older than " +
                        std::to_string(retentionDays) + " days");
             }
+
+            // 4. Global Temp Cleanup (Catch orphans and untracked .tmp files)
+            fileManager.cleanupTempFolder(24); // 24 hours age limit
 
           } catch (const std::exception &e) {
             LOG_ERROR("Session cleanup error: " + std::string(e.what()));
