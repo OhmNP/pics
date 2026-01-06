@@ -23,6 +23,7 @@ import java.util.concurrent.Executors
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.photosync.android.viewmodel.PairingViewModel
+import com.photosync.android.ui.components.*
 
 import org.json.JSONObject
 
@@ -61,13 +62,16 @@ fun PairingScreen(
         }
     }
     
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
+    GradientBox(modifier = modifier.fillMaxSize()) {
+        AmbientBackground()
+        
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
         Text(
             text = "Pair with Server",
             style = MaterialTheme.typography.headlineMedium,
@@ -205,6 +209,7 @@ fun PairingScreen(
             }
         }
     }
+    }
 }
 
 @Composable
@@ -213,7 +218,7 @@ fun QRCodeScanner(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     var hasScanned by remember { mutableStateOf(false) }
     
     AndroidView(

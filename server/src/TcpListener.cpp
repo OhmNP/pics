@@ -430,6 +430,25 @@ void Session::handleUploadInit(const json &payload) {
   long long fileSize = payload["size"];
   std::string fileHash = payload["hash"];
 
+  // 0. Pre-emptive Deduplication Check
+  // If we already have the file, we can skip the transfer entirely.
+  // We set up the session as "complete" so the client falls through to
+  // finishUpload immediately.
+  if (fileManager_.photoExists(fileHash)) {
+    std::string uploadId =
+        db_.createUploadSession(clientId_, fileHash, filename, fileSize);
+    if (!uploadId.empty()) {
+      // Mark session as fully received so handleUploadFinish doesn't complain
+      // about size mismatch
+      db_.updateSessionReceivedBytes(uploadId, fileSize);
+
+      log("Deduplication: File exists, skipping upload for " + filename);
+      sendPacket(ProtocolParser::createUploadAckPacket(uploadId, 1024 * 1024,
+                                                       fileSize, "RESUMING"));
+      return;
+    }
+  }
+
   // 1. Check DB for existing session (Resume Reconciliation)
   UploadSession session =
       db_.getUploadSessionByHash(clientId_, fileHash, fileSize);
@@ -578,6 +597,13 @@ void Session::handleUploadFinish(const json &payload) {
   }
 
   std::string tempPath = fileManager_.getUploadTempPath(uploadId);
+
+  // Handle 0-byte files that never had chunks appended
+  if (session.fileSize == 0 && !fs::exists(tempPath)) {
+    std::ofstream outfile(tempPath, std::ios::binary);
+    outfile.close();
+  }
+
   std::string computedHash = FileManager::calculateSHA256(tempPath);
   if (computedHash != sha256) {
     log("Hash mismatch for " + uploadId + ". Expected " + sha256 + " got " +
@@ -612,5 +638,14 @@ void Session::handleUploadAbort(const json &payload) {
   if (session.clientId == clientId_) {
     db_.deleteUploadSession(uploadId);
     fs::remove(fileManager_.getUploadTempPath(uploadId));
+
+    // Ack the abort so client knows it's safe to retry
+    sendPacket(ProtocolParser::createUploadResultPacket(uploadId, "ABORTED",
+                                                        "Session Aborted"));
+  } else {
+    // Even if not found or unauthorized, send error/ack to unblock client?
+    // If session not found, it's effectively aborted.
+    sendPacket(ProtocolParser::createUploadResultPacket(uploadId, "ABORTED",
+                                                        "Session Not Found"));
   }
 }

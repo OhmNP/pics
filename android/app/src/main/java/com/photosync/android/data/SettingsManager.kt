@@ -37,6 +37,8 @@ class SettingsManager(context: Context) {
         private const val KEY_BATTERY_THRESHOLD = "battery_threshold"
         private const val KEY_EXCLUDED_FOLDERS = "excluded_folders"
         private const val KEY_LAST_BACKUP = "last_successful_backup"
+        private const val KEY_LAST_SCAN = "last_scan_timestamp"
+        private const val KEY_USER_AVATAR = "user_avatar_uri"
         
         private const val DEFAULT_IP = ""
         private const val DEFAULT_PORT = 50505
@@ -114,4 +116,12 @@ class SettingsManager(context: Context) {
     var lastSuccessfulBackupTimestamp: Long
         get() = prefs.getLong(KEY_LAST_BACKUP, 0)
         set(value) = prefs.edit().putLong(KEY_LAST_BACKUP, value).apply()
+
+    var lastScanTimestamp: Long
+        get() = prefs.getLong(KEY_LAST_SCAN, 0)
+        set(value) = prefs.edit().putLong(KEY_LAST_SCAN, value).apply()
+        
+    var userAvatarUri: String
+        get() = prefs.getString(KEY_USER_AVATAR, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_USER_AVATAR, value).apply()
 }

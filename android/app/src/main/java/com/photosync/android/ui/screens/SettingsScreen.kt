@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -64,13 +65,20 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
 import com.photosync.android.ui.components.GlassCard
 import com.photosync.android.ui.components.GradientBox
+import com.photosync.android.ui.components.AmbientBackground
 import com.photosync.android.ui.components.NeonText
 import com.photosync.android.ui.theme.Error
 import com.photosync.android.ui.theme.Primary
@@ -105,39 +113,29 @@ fun SettingsScreen(
             }
     ) {
         // Ambient Background Blobs
-        Box(
-            modifier = Modifier
-                .offset(x = (-100).dp, y = (-100).dp)
-                .size(400.dp)
-                .alpha(0.2f)
-                .background(
-                    brush = Brush.radialGradient(colors = listOf(Secondary, Color.Transparent)),
-                    shape = CircleShape
-                )
-        )
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .offset(x = 100.dp, y = 100.dp)
-                .size(400.dp)
-                .alpha(0.2f)
-                .background(
-                    brush = Brush.radialGradient(colors = listOf(Primary, Color.Transparent)),
-                    shape = CircleShape
-                )
-        )
+        AmbientBackground()
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(20.dp),
+                .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // --- Header ---
+            NeonText(
+                text = "Settings",
+                modifier = Modifier.padding(bottom = 8.dp),
+                style = MaterialTheme.typography.headlineMedium,
+                glowColor = Color.Transparent // Subtle or no glow for Settings to distinguish from "Active" Sync
+            )
+
             // --- Profile Header ---
             ProfileHeaderSection(
                 userName = userName,
-                onUserNameChange = viewModel::updateUserName
+                onUserNameChange = viewModel::updateUserName,
+                userAvatarUri = viewModel.userAvatarUri.collectAsStateWithLifecycle().value,
+                onAvatarChange = viewModel::updateUserAvatar
             )
 
             // --- Server Configuration Card ---
@@ -161,6 +159,7 @@ fun SettingsScreen(
                 onBatteryThresholdChange = { viewModel.updateBatteryThreshold(it.toInt()) }
             )
 
+            /*
             // --- Exclusions Card ---
             SettingsSectionTitle("Exclusions")
             ExclusionsCard(
@@ -168,6 +167,7 @@ fun SettingsScreen(
                 onAddFolder = viewModel::addExcludedFolder,
                 onRemoveFolder = viewModel::removeExcludedFolder
             )
+            */
             
             // --- Data Management Card ---
             SettingsSectionTitle("Data Management")
@@ -187,118 +187,153 @@ fun SettingsScreen(
 @Composable
 private fun ProfileHeaderSection(
     userName: String,
-    onUserNameChange: (String) -> Unit
+    onUserNameChange: (String) -> Unit,
+    userAvatarUri: String,
+    onAvatarChange: (android.net.Uri) -> Unit
 ) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = { uri ->
+            if (uri != null) {
+                onAvatarChange(uri)
+            }
+        }
+    )
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
     ) {
-        // Avatar with Glow
+        // Avatar with Glow (smaller for row)
         Box(
-            contentAlignment = Alignment.Center
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(150.dp) // Maintain layout size
+                .clickable {
+                     photoPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
         ) {
             Box(
                 modifier = Modifier
-                    .size(110.dp)
-                    .blur(20.dp)
-                    .background(Primary.copy(alpha = 0.5f), CircleShape)
+                    .requiredSize(200.dp)
+                    .background(
+                        brush = Brush.radialGradient(
+                            0.0f to Primary.copy(alpha = 0.5f),
+                            0.9f to Color.Transparent
+                        ),
+                        shape = CircleShape
+                    )
             )
             Box(
                 modifier = Modifier
-                    .size(100.dp)
+                    .matchParentSize()
                     .border(2.dp, Brush.linearGradient(listOf(Primary, Secondary)), CircleShape)
                     .background(SurfaceVariant, CircleShape)
                     .clip(CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Person,
-                    contentDescription = "Profile",
-                    tint = TextPrimary.copy(alpha = 0.8f),
-                    modifier = Modifier.size(50.dp)
-                )
-            }
-        }
-        
-        Spacer(modifier = Modifier.height(12.dp))
-        
-        // Editable User Name or Display Text
-        var isEditing by remember { mutableStateOf(userName.isBlank()) }
-        val focusRequester = remember { FocusRequester() }
-        
-        if (isEditing) {
-            var hasGainedFocus by remember { mutableStateOf(false) }
-            
-            LaunchedEffect(Unit) {
-               focusRequester.requestFocus()
-            }
-            
-            OutlinedTextField(
-                value = userName,
-                onValueChange = onUserNameChange,
-                label = { Text("Display Name") },
-                textStyle = MaterialTheme.typography.titleLarge.copy(
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                ),
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Primary,
-                    unfocusedBorderColor = Color.Transparent,
-                    focusedLabelColor = Primary,
-                    unfocusedLabelColor = TextSecondary,
-                    cursorColor = Primary,
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent
-                ),
-                modifier = Modifier
-                    .fillMaxWidth(0.8f)
-                    .focusRequester(focusRequester)
-                    .onFocusChanged { focusState ->
-                        if (focusState.isFocused) {
-                            hasGainedFocus = true
-                        }
-                        if (!focusState.isFocused && hasGainedFocus && userName.isNotBlank() && isEditing) {
-                            isEditing = false
-                        }
-                    },
-                trailingIcon = {
-                    IconButton(onClick = { if (userName.isNotBlank()) isEditing = false }) {
-                        Icon(Icons.Rounded.Check, "Save", tint = Primary)
-                    }
-                }
-            )
-        } else {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                NeonText(
-                    text = userName,
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                    color = TextPrimary,
-                    glowColor = PrimaryGlow.copy(alpha = 0.5f)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                IconButton(onClick = { isEditing = true }) {
+                if (userAvatarUri.isNotBlank()) {
+                    AsyncImage(
+                        model = userAvatarUri,
+                        contentDescription = "Profile Avatar",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
                     Icon(
-                        imageVector = Icons.Rounded.Edit,
-                        contentDescription = "Edit Name",
-                        tint = TextSecondary.copy(alpha = 0.5f),
-                        modifier = Modifier.size(20.dp)
+                        imageVector = Icons.Rounded.Person,
+                        contentDescription = "Profile",
+                        tint = TextPrimary.copy(alpha = 0.8f),
+                        modifier = Modifier.size(50.dp)
                     )
                 }
             }
         }
-
         
-        Text(
-            text = "PhotoSync Client",
-            style = MaterialTheme.typography.bodyMedium,
-            color = TextSecondary
-        )
+        Spacer(modifier = Modifier.width(16.dp))
+        
+        Column(
+            verticalArrangement = Arrangement.Center
+        ) {
+            // Editable User Name or Display Text
+            var isEditing by remember { mutableStateOf(false) }
+            val focusRequester = remember { FocusRequester() }
+            
+            if (isEditing) {
+                var hasGainedFocus by remember { mutableStateOf(false) }
+                
+                LaunchedEffect(Unit) {
+                   focusRequester.requestFocus()
+                }
+                
+                OutlinedTextField(
+                    value = userName,
+                    onValueChange = onUserNameChange,
+                    label = { Text("Display Name") },
+                    textStyle = MaterialTheme.typography.headlineSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    ),
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Primary,
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedLabelColor = Primary,
+                        unfocusedLabelColor = TextSecondary,
+                        cursorColor = Primary,
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester)
+                        .onFocusChanged { focusState ->
+                            if (focusState.isFocused) {
+                                hasGainedFocus = true
+                            }
+                            if (!focusState.isFocused && hasGainedFocus && isEditing) {
+                                isEditing = false
+                            }
+                        },
+                    trailingIcon = {
+                        IconButton(onClick = { isEditing = false }) {
+                            Icon(Icons.Rounded.Check, "Save", tint = Primary)
+                        }
+                    }
+                )
+            } else {
+                val displayName = userName.ifBlank { "SyncClient" }
+                Box(
+                    modifier = Modifier
+                        .clickable { isEditing = true }
+                        .padding(horizontal = 8.dp, vertical = 4.dp) // Touch target
+                ) {
+                    NeonText(
+                        text = displayName,
+                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                        color = TextPrimary,
+                        glowColor = PrimaryGlow.copy(alpha = 0.5f),
+                        modifier = Modifier.padding(start = 12.dp, top = 6.dp) // Make room for top-left icon
+                    )
+                    
+                   Icon(
+                        imageVector = Icons.Rounded.Edit,
+                        contentDescription = "Edit Name",
+                        tint = Primary.copy(alpha = 0.5f),
+                        modifier = Modifier
+                            .size(14.dp)
+                            .align(Alignment.TopStart)
+                    )
+                }
+            }
+            
+            Text(
+                text = "PhotoSync Client",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary
+            )
+        }
     }
 }
 
@@ -306,9 +341,9 @@ private fun ProfileHeaderSection(
 private fun SettingsSectionTitle(title: String) {
     Text(
         text = title,
-        style = MaterialTheme.typography.labelLarge,
-        color = TextSecondary,
-        modifier = Modifier.padding(start = 8.dp)
+        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+        color = Primary,
+        modifier = Modifier.padding(start = 8.dp, bottom = 4.dp)
     )
 }
 
@@ -551,7 +586,8 @@ private fun SyncPreferencesCard(
             
             HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
             
-            // WiFi Only
+            /*
+            // WiFi Only (Hidden: No mobile data feature yet)
              Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -583,6 +619,7 @@ private fun SyncPreferencesCard(
             }
             
              HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
+             */
              
              // Charging Only
              Row(

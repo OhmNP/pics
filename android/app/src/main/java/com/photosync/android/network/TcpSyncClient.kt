@@ -40,9 +40,6 @@ class TcpSyncClient(
     private val _connectionStatus = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Disconnected)
     val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus
 
-    private val _syncProgress = MutableStateFlow<SyncProgress>(SyncProgress())
-    val syncProgress: StateFlow<SyncProgress> = _syncProgress
-
     companion object {
         private const val TAG = "TcpSyncClient"
         private const val CONNECT_TIMEOUT_MS = 5000
@@ -338,8 +335,6 @@ class TcpSyncClient(
                     if (isDisconnecting.get()) throw CancellationException("Disconnecting", e)
                     throw e
                 }
-                
-                _syncProgress.value = _syncProgress.value.copy(bytesTransferred = _syncProgress.value.bytesTransferred + chunk.size)
             }
         } finally {
              // We don't close the inputStream here, we leave it to the caller
@@ -380,7 +375,6 @@ class TcpSyncClient(
             // No ACK per chunk for speed
             
             offset += chunkSize
-            _syncProgress.value = _syncProgress.value.copy(bytesTransferred = _syncProgress.value.bytesTransferred + chunk.size)
         }
         
         // Send TRANSFER_COMPLETE for this file?
@@ -578,6 +572,29 @@ class TcpSyncClient(
             if (!isDisconnecting.get()) {
                 Log.e(TAG, "Error finishing upload", e)
             }
+            false
+        }
+    }
+    suspend fun abortUpload(uploadId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject()
+            json.put("uploadId", uploadId)
+            
+            val payloadBytes = json.toString().toByteArray(java.nio.charset.StandardCharsets.UTF_8)
+            val header = com.photosync.android.network.protocol.PacketHeader(
+                version = com.photosync.android.network.protocol.SyncProtocol.VERSION_2.toByte(), 
+                type = PacketType.UPLOAD_ABORT,
+                payloadLength = payloadBytes.size
+            )
+            val packet = NetworkPacket(header, payloadBytes)
+            
+            val response = sendRequest(packet)
+            
+            // Server should respond with UPLOAD_RESULT (status=ABORTED) or just ACK
+            // Assume success if we get a response
+            return@withContext (response != null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error aborting upload", e)
             false
         }
     }

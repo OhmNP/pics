@@ -46,44 +46,23 @@ fun HomeScreen(
 ) {
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
     val syncProgress by viewModel.syncProgress.collectAsStateWithLifecycle()
-    val syncedCount by viewModel.syncedCount.collectAsState(initial = 0)
-    val pendingCount by viewModel.pendingCount.collectAsState(initial = 0)
     val recentUploads by viewModel.recentUploads.collectAsStateWithLifecycle(initialValue = emptyList())
     val serverStatus by viewModel.serverStatus.collectAsStateWithLifecycle()
     val userName by viewModel.userName.collectAsStateWithLifecycle()
     val storageUsage by viewModel.storageUsage.collectAsStateWithLifecycle()
+    val storageString by viewModel.storageString.collectAsStateWithLifecycle()
 
     // Gradient Background
     GradientBox(modifier = modifier.fillMaxSize()) {
         // Ambient Background Blobs
-        Box(
-            modifier = Modifier
-                .offset(x = (-100).dp, y = (-100).dp)
-                .size(400.dp)
-                .alpha(0.2f)
-                .background(
-                    brush = Brush.radialGradient(colors = listOf(Primary, Color.Transparent)),
-                    shape = CircleShape
-                )
-        )
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .offset(x = 100.dp, y = 100.dp)
-                .size(400.dp)
-                .alpha(0.2f)
-                .background(
-                    brush = Brush.radialGradient(colors = listOf(Secondary, Color.Transparent)),
-                    shape = CircleShape
-                )
-        )
+        AmbientBackground()
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // --- Header ---
             HeaderSection(userName)
@@ -94,7 +73,7 @@ fun HomeScreen(
             // --- Stats Grid ---
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Box(Modifier.weight(1f)){
                     // Hybrid Status Logic:
@@ -130,13 +109,12 @@ fun HomeScreen(
                         indicator = status == "Online" || status == "Sync Active"
                     )
                 }
+                
                 Box(Modifier.weight(1f)) {
-                    GlassStatCard(
-                        title = "Storage",
-                        value = "${(storageUsage * 100).toInt()}%",
-                        icon = Icons.Rounded.Storage,
-                        accentColor = Primary,
-                        storageProgress = storageUsage
+                    StorageCard(
+                        percent = (storageUsage * 100).toInt(),
+                        detailString = storageString,
+                        progress = storageUsage
                     )
                 }
             }
@@ -223,11 +201,19 @@ private fun SyncStatusVisualizerCard(state: EnhancedSyncService.SyncState, progr
         is EnhancedSyncService.SyncState.Connecting -> "Connecting..."
         is EnhancedSyncService.SyncState.Discovering -> "Searching..."
         is EnhancedSyncService.SyncState.Reconciling -> "Analyzing..."
-        is EnhancedSyncService.SyncState.Error -> "Connection Failed" // Shortened for UI
-        else -> "Ready to Sync"
+        is EnhancedSyncService.SyncState.Error -> "Connection Failed"
+        else -> if (progress.percent >= 100) "All Synced" else "Ready to Sync"
     }
     
     val statusColor = when(state) {
+        is EnhancedSyncService.SyncState.Syncing -> Primary
+        is EnhancedSyncService.SyncState.Paused -> Secondary
+        is EnhancedSyncService.SyncState.Error -> Error
+        else -> if (progress.percent >= 100) Success else TextSecondary
+    }
+
+    // specific color for progress bar (requested to remain as before)
+    val progressBarColor = when(state) {
         is EnhancedSyncService.SyncState.Syncing -> Primary
         is EnhancedSyncService.SyncState.Error -> Error
         else -> TextSecondary
@@ -277,30 +263,30 @@ private fun SyncStatusVisualizerCard(state: EnhancedSyncService.SyncState, progr
                     // Indicator
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth(if (isSyncing) progress.progressPercentage / 100f else 0.05f) 
+                            .fillMaxWidth(if (isSyncing || progress.percent >= 100) (if (progress.percent >= 100) 1f else progress.percent / 100f) else 0.05f) 
                             .fillMaxHeight()
                             .background(
                                 Brush.horizontalGradient(
-                                    listOf(statusColor.copy(alpha = 0.7f), statusColor)
+                                    listOf(progressBarColor.copy(alpha = 0.7f), progressBarColor)
                                 ), 
                                 CircleShape
                             )
                     )
                     // Glow effect for indicator
-                    if (isSyncing) {
+                    if (isSyncing || progress.percent >= 100) {
                          Box(
                             modifier = Modifier
-                                .fillMaxWidth(progress.progressPercentage / 100f)
+                                .fillMaxWidth(if (progress.percent >= 100) 1f else progress.percent / 100f)
                                 .fillMaxHeight()
                                 .blur(8.dp)
-                                .background(statusColor, CircleShape)
+                                .background(progressBarColor, CircleShape)
                         )
                     }
                 }
 
                 // Percentage / Detail Text
                 Text(
-                    text = if (isSyncing) "${progress.progressPercentage.toInt()}%" else if (state is EnhancedSyncService.SyncState.Error) "Retrying..." else "Waiting...",
+                    text = if (isSyncing) "${progress.percent}%" else if (state is EnhancedSyncService.SyncState.Error) "Retrying..." else if (progress.percent >= 100) "100%" else "Waiting...",
                     style = MaterialTheme.typography.labelLarge,
                     color = TextSecondary.copy(alpha = 0.8f),
                     fontWeight = FontWeight.Medium
@@ -365,7 +351,7 @@ private fun GlassStatCard(
     indicator: Boolean = false,
     storageProgress: Float? = null
 ) {
-    GlassCard(modifier = Modifier.fillMaxWidth().height(140.dp)) {
+    GlassCard(modifier = Modifier.fillMaxWidth().height(160.dp)) {
         Column(
             modifier = Modifier
                 .padding(16.dp)
@@ -396,7 +382,8 @@ private fun GlassStatCard(
                     text = title,
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary,
-                    maxLines = 1
+                    maxLines = 1,
+                    fontSize = 14.sp
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 
@@ -485,9 +472,14 @@ fun RecentUploadItem(item: MediaItem) {
                 )
         )
         
-        // Mock time
+        // Real Timestamp
+        val timeString = remember(item.lastModified) {
+            val sdf = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+            sdf.format(java.util.Date(item.lastModified))
+        }
+        
         Text(
-            text = "7:30 pm",
+            text = timeString,
             style = MaterialTheme.typography.labelSmall,
             color = Color.White.copy(alpha = 0.8f),
             modifier = Modifier
@@ -495,5 +487,84 @@ fun RecentUploadItem(item: MediaItem) {
                 .padding(8.dp),
             fontSize = 10.sp
         )
+    }
+}
+
+@Composable
+private fun StorageCard(
+    percent: Int,
+    detailString: String,
+    progress: Float
+) {
+    GlassCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(160.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.Start // Changed to Start for cleaner look, or Center? User didn't specify. Center is safe.
+        ) {
+             // 1. Stats Text ($percent% used)
+            Text(
+                text = "$percent% used",
+                style = MaterialTheme.typography.titleMedium, // Prominent
+                color = Primary,
+                fontWeight = FontWeight.Bold
+            )
+            
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 2. Progress Bar
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(12.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(SurfaceVariant)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(progress)
+                        .fillMaxHeight()
+                        .background(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(
+                                    Color(0xFF8E44AD), // Purple
+                                    Color(0xFFE91E63), // Pink
+                                    Color(0xFF2196F3), // Blue
+                                    Color(0xFF00BCD4)  // Cyan
+                                )
+                            )
+                        )
+                )
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            // 3. Internal Storage (Title) - & 4. GB Details together?
+            // User said: Internal Storage THEN GB Used
+            
+            // 3. Internal Storage Title
+            Text(
+                text = "Internal storage",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary,
+                fontSize = 14.sp
+            )
+            
+            Spacer(modifier = Modifier.height(4.dp))
+            
+            // 4. GB Used vs GB Free
+            Text(
+                text = detailString,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Normal),
+                color = TextPrimary,
+                fontSize = 14.sp
+            )
+        }
     }
 }

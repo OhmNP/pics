@@ -11,5 +11,8 @@ data class MediaItem(
     val lastModified: Long,
     val path: String,
     val hash: String,
-    val syncStatus: SyncStatus
+    val syncStatus: SyncStatus?,
+    val lastKnownOffset: Long = 0,
+    val syncSize: Long = 0,
+    val uploadId: String? = null
 )

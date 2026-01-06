@@ -13,3 +13,10 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Logs
+*.log
+
+# Keystore
+*.jks
+*.keystore

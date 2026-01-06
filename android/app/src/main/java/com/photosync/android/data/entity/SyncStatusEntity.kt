@@ -13,12 +13,17 @@ data class SyncStatusEntity(
     val uploadId: String? = null,
     val lastKnownOffset: Long = 0,
     val lastUpdated: Long = System.currentTimeMillis(),
+    val firstSeenAt: Long = System.currentTimeMillis(),
+    val queuedAt: Long = 0,
+    val uploadStartedAt: Long = 0,
+    val syncedAt: Long = 0,
     val retryCount: Int = 0,
     val lastAttemptTimestamp: Long = 0,
     val failureReason: String? = null
 )
 
 enum class SyncStatus {
+    DISCOVERED, // Found in MediaStore, not yet queued
     PENDING,
     UPLOADING, // Active transfer
     SYNCED,

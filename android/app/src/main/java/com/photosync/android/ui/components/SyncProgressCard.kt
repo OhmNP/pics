@@ -39,7 +39,7 @@ fun SyncProgressCard(
                 
                 if (progress.isActive) {
                     Text(
-                        text = "${progress.currentFileIndex}/${progress.totalFiles}",
+                        text = "${progress.syncedCount}/${progress.eligibleCount}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
@@ -50,7 +50,7 @@ fun SyncProgressCard(
                 Spacer(modifier = Modifier.height(12.dp))
                 
                 LinearProgressIndicator(
-                    progress = { progress.progressPercentage / 100f },
+                    progress = { progress.percent / 100f },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(8.dp),

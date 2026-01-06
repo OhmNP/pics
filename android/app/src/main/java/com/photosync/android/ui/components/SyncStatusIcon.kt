@@ -31,6 +31,14 @@ fun SyncStatusIcon(
                     modifier = Modifier.size(16.dp)
                 )
             }
+            SyncStatus.DISCOVERED -> {
+                Icon(
+                    imageVector = Icons.Default.FiberNew,
+                    contentDescription = "Discovered",
+                    tint = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
             SyncStatus.PENDING -> {
                 Icon(
                     imageVector = Icons.Default.Add,

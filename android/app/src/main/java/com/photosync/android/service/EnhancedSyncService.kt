@@ -1,36 +1,51 @@
 package com.photosync.android.service
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.os.Build
-import android.os.IBinder
-import android.provider.Settings
-import android.util.Log
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
-import com.photosync.android.data.AppDatabase
-import com.photosync.android.data.entity.SyncStatus
-import com.photosync.android.model.SyncProgress
-import com.photosync.android.network.TcpSyncClient
-import com.photosync.android.network.UdpDiscoveryListener
-import com.photosync.android.repository.MediaRepository
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
-import kotlinx.coroutines.*
+import android.os.BatteryManager
+import android.os.Build
+import android.os.IBinder
+import android.provider.Settings
+import android.util.Log
+import androidx.annotation.RequiresPermission
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import com.photosync.android.data.AppDatabase
+import com.photosync.android.data.SettingsManager
+import com.photosync.android.data.entity.SyncStatus
+import com.photosync.android.model.SyncProgress
+import com.photosync.android.network.TcpSyncClient
+import com.photosync.android.repository.MediaRepository
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import android.os.BatteryManager
-import com.photosync.android.data.SettingsManager
 
 class EnhancedSyncService : Service() {
     
@@ -109,10 +124,21 @@ class EnhancedSyncService : Service() {
         setupNetworkMonitoring()
         startMonitoring()
         setupContentObserver()
+        
+        // Reset any stale UPLOADING items to PENDING (e.g. from crash/force-stop)
+        serviceScope.launch {
+            try {
+                mediaRepository.resetStuckUploadingToPending()
+                Log.i(TAG, "Reset stuck UPLOADING items to PENDING")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to reset stuck items", e)
+            }
+        }
     }
     
     override fun onBind(intent: Intent?): IBinder? = null
     
+    @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START_SYNC -> startSync()
@@ -131,6 +157,19 @@ class EnhancedSyncService : Service() {
 
     fun requestSync(reason: String, manual: Boolean = false) {
         val currentTime = System.currentTimeMillis()
+        val settings = SettingsManager(this)
+
+        // 0. Auto-Sync Check
+        if (!manual && !settings.autoSyncEnabled) {
+            Log.d(TAG, "[Orchestrator] RequestSync($reason) rejected - Auto-sync disabled")
+            return
+        }
+        
+        // 0.5. Paused Check
+        if (!manual && _syncState.value is SyncState.Paused) {
+            Log.d(TAG, "[Orchestrator] RequestSync($reason) rejected - Sync is Paused")
+            return
+        }
         
         // 1. Rate Limit: 15s (unless manual)
         if (!manual && (currentTime - lastSyncRequestTime < 15000)) {
@@ -143,6 +182,10 @@ class EnhancedSyncService : Service() {
         // 2. Debounce (3s)
         requestDebounceJob.getAndSet(null)?.cancel()
         val job = serviceScope.launch {
+            if (reason == "NETWORK_AVAILABLE") {
+                 mediaRepository.resumePendingFromNetworkPause()
+                 Log.i(TAG, "Resumed PAUSED_NETWORK items")
+            }
             if (!manual) delay(3000)
             
             // 3. Single-flight guard
@@ -167,7 +210,7 @@ class EnhancedSyncService : Service() {
         
         startForeground(NOTIFICATION_ID, createNotification("Starting sync..."))
         
-        syncJob = serviceScope.launch {
+        syncJob = serviceScope.launch @androidx.annotation.RequiresPermission(android.Manifest.permission.POST_NOTIFICATIONS) {
             try {
                 performSync()
             } catch (e: CancellationException) {
@@ -198,6 +241,13 @@ class EnhancedSyncService : Service() {
                     if (serverIp.isBlank()) {
                         _serverStatus.value = ServerConnectivityStatus.DISCONNECTED
                         delay(5000)
+                        continue
+                    }
+
+                    // Strict Network Check
+                    if (!isNetworkAvailable(settingsManager)) {
+                        _serverStatus.value = ServerConnectivityStatus.DISCONNECTED
+                        delay(3000)
                         continue
                     }
 
@@ -248,11 +298,13 @@ class EnhancedSyncService : Service() {
         }
     }
     
+    @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
     private fun pauseSync() {
         _syncState.value = SyncState.Paused
         updateNotification("Sync paused")
     }
     
+    @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
     private fun resumeSync() {
         if (_syncState.value is SyncState.Paused) {
             _syncState.value = SyncState.Syncing
@@ -274,7 +326,7 @@ class EnhancedSyncService : Service() {
     }
     
     private fun startReconciliation() {
-        serviceScope.launch {
+        serviceScope.launch @androidx.annotation.RequiresPermission(android.Manifest.permission.POST_NOTIFICATIONS) {
             try {
                 performReconciliation()
             } catch (e: Exception) {
@@ -284,12 +336,13 @@ class EnhancedSyncService : Service() {
         }
     }
     
+    @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
     private suspend fun performSync() {
         // 1. Discover server
         _syncState.value = SyncState.Discovering
         updateNotification("Discovering server...")
 
-        val settingsManager = com.photosync.android.data.SettingsManager(this)
+        val settingsManager = SettingsManager(this)
         val serverIp = settingsManager.serverIp
 
         if (serverIp.isBlank()) {
@@ -300,32 +353,41 @@ class EnhancedSyncService : Service() {
         // 2. Initial connection check
         _syncState.value = SyncState.Connecting
         updateNotification("Connecting to server...")
-
-        // 3. Get all media items
-        val mediaItems = mediaRepository.getAllMediaItems()
-        if (mediaItems.isEmpty()) {
-            _syncState.value = SyncState.Idle
-            return
+        
+        // 3. Scan & Queue (Pipeline Phase 1) - PARALLEL
+        // We launch scanning in background, allowing workers to start picking up items immediately.
+        val isScanning = AtomicBoolean(true)
+        
+        val scanningJob = serviceScope.launch(Dispatchers.IO) {
+            try {
+                // If auto-sync, insert directly as PENDING. Else DISCOVERED.
+                val targetStatus = if (settingsManager.autoSyncEnabled) SyncStatus.PENDING else SyncStatus.DISCOVERED
+                mediaRepository.scanForNewMedia(targetStatus)
+                
+                // If NOT auto-sync, we still queue existing DISCOVERED items if configured? 
+                // Previously, queueAllDiscovered was conditional on autoSync.
+                // If autoSync is ON, scanForNewMedia puts them in PENDING, so queueAllDiscovered is redundant for *new* items.
+                // But we should run queueAllDiscovered once to pick up any old DISCOVERED items that were missed?
+                if (settingsManager.autoSyncEnabled) {
+                     mediaRepository.queueAllDiscovered()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Scanning failed", e)
+            } finally {
+                isScanning.set(false)
+                Log.d(TAG, "Scanning finished")
+            }
         }
-
+        
+        // 4. Upload Loop (Pipeline Phase 2)
         _syncState.value = SyncState.Syncing
-        _syncProgress.value = SyncProgress(totalFiles = mediaItems.size, isActive = true)
-
-        // Parallel Sync Configuration
-        val workerCount = 4
-        val itemChannel =
-            kotlinx.coroutines.channels.Channel<com.photosync.android.model.MediaItem>(kotlinx.coroutines.channels.Channel.UNLIMITED)
-
-        // Load items into channel
-        mediaItems.forEach { itemChannel.trySend(it) }
-        itemChannel.close()
-
-        val completedCount = java.util.concurrent.atomic.AtomicInteger(0)
-        val totalBytesTransferred = java.util.concurrent.atomic.AtomicLong(0)
-
+        _syncProgress.value = SyncProgress(eligibleCount = 0, isActive = true) 
+        
+        val workerCount = 5
+        val completedCount = AtomicInteger(0)
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
         val userName = settingsManager.userName
-
+        
         try {
             coroutineScope {
                 val jobs = List(workerCount) { workerId ->
@@ -333,67 +395,83 @@ class EnhancedSyncService : Service() {
                         Log.d(TAG, "Worker $workerId started")
                         val client = TcpSyncClient(serverIp)
                         activeClients.add(client)
+                        var isConnected = false
                         
                         try {
-                            if (!client.connect()) {
-                                Log.w(TAG, "Worker $workerId failed to connect")
-                                return@launch
-                            }
+                            // Lazy Connection: We don't connect until we actually have an item to sync.
+                            // This prevents "Trying to do a sync" when there is nothing to upload.
                             
-                            val sessionId = client.startSession(deviceId, "", userName)
-                            if (sessionId == null) {
-                                Log.w(TAG, "Worker $workerId failed to start session")
-                                return@launch
-                            }
-                            
-                            for (item in itemChannel) {
+                            // Work Loop
+                            while (isActive) {
+                                // Pull next item (Transactional)
+                                var item = mediaRepository.claimNextPendingItem()
+                                
+                                if (item == null) {
+                                    // If scanning is active, wait and retry.
+                                    if (isScanning.get()) {
+                                        delay(1000)
+                                        continue
+                                    } else {
+                                        // Double check after scanning finished to ensure no race
+                                        item = mediaRepository.claimNextPendingItem()
+                                        if (item == null) break // Truly done
+                                    }
+                                }
+                                
                                 try {
-                                    // Check if paused (Manual or Constraint)
+                                    // Check if paused
                                     while (_syncState.value is SyncState.Paused) {
                                         delay(1000)
                                     }
 
+                                    // Lazy Connect
+                                    if (!isConnected) {
+                                        if (!client.connect()) throw IOException("Connection failed")
+                                        val sid = client.startSession(deviceId, "", userName)
+                                        if (sid == null) throw IOException("Session failed")
+                                        isConnected = true
+                                        Log.d(TAG, "Worker $workerId connected lazily")
+                                    }
+
+                                    // Upload Logic ... (Same as before)
+                                    
                                     val hash = if (item.hash.isEmpty()) {
                                         mediaRepository.calculateHash(item.uri)
                                     } else {
                                         item.hash
                                     }
+                                    
+                                    // Item is already UPLOADING from claim
 
-                                    mediaRepository.updateSyncStatus(item.id, hash, SyncStatus.UPLOADING)
-
-                                    // Constraint check periodically
+                                    // Constraint check ...
                                     if (!checkConstraints(settingsManager)) {
-                                        Log.w(TAG, "Constraints violated. Pausing.")
-                                        _syncState.value = SyncState.Paused
-                                        updateNotification("Waiting for charging/Wi-Fi...")
-                                        while (_syncState.value is SyncState.Paused && !checkConstraints(settingsManager)) {
-                                            delay(5000)
-                                            if (!isActive) break
-                                        }
-                                        if (_syncState.value is SyncState.Paused && checkConstraints(settingsManager)) {
-                                            _syncState.value = SyncState.Syncing
-                                            updateNotification("Resuming...")
-                                        }
+                                         // Pause logic ...
+                                         // If we pause, we should keep this item or return to pending? 
+                                         // For now, hold.
+                                         _syncState.value = SyncState.Paused
+                                         while (_syncState.value is SyncState.Paused) delay(5000)
+                                         _syncState.value = SyncState.Syncing
                                     }
 
-                                    val index = completedCount.get() + 1
-                                    updateNotification("Syncing... ($index/${mediaItems.size})")
-                                    _syncProgress.value = _syncProgress.value.copy(
-                                        currentFile = item.name,
-                                        currentFileIndex = index
-                                    )
+                                    // V2 / V1 Upload Flow (Copied from previous)
+                                    
+                                    // Check for Manual Restart Signal
+                                    // If uploadId exists but lastKnownOffset is 0, it means we requested a restart (queueManualUpload).
+                                    // We should tell server to ABORT the previous session first.
+                                    if (!item.uploadId.isNullOrEmpty() && item.lastKnownOffset == 0L) {
+                                        Log.i(TAG, "Process explicit restart for ${item.name}: Aborting session ${item.uploadId}")
+                                        client.abortUpload(item.uploadId)
+                                        // We don't need to clear it locally, as we will get a new one from resumeUpload (which starts new)
+                                    }
 
-                                    // V2 / V1 Upload Flow
                                     var initResult = client.resumeUpload(item.name, item.size, hash)
                                     
                                     if (initResult == null) {
                                         // V1 Fallback
-                                        Log.w(TAG, "V2 Init failed, trying V1")
                                         if (client.sendPhotoMetadata(item.name, item.size, hash)) {
                                             contentResolver.openInputStream(item.uri)?.use { stream ->
                                                 if (client.sendPhotoDataStream(stream)) {
-                                                    totalBytesTransferred.addAndGet(item.size)
-                                                    mediaRepository.markAsSynced(item.id, hash)
+                                                    mediaRepository.markAsSynced(item.id, hash, item.size)
                                                 } else {
                                                     mediaRepository.markAsFailed(item.id, "V1 Transfer Failed")
                                                 }
@@ -407,9 +485,12 @@ class EnhancedSyncService : Service() {
                                         var currentOffset = initResult.offset
                                         val chunkSize = initResult.chunkSize
                                         
+                                        if (currentOffset > 0) {
+                                            mediaRepository.updateUploadProgress(item.id, currentOffset, item.size)
+                                        }
+
                                         contentResolver.openInputStream(item.uri)?.use { stream ->
                                             if (currentOffset > 0) stream.skip(currentOffset)
-                                            
                                             val buffer = ByteArray(chunkSize)
                                             var bytesRead: Int
                                             var success = true
@@ -423,16 +504,21 @@ class EnhancedSyncService : Service() {
                                                 val chunk = if (bytesRead == chunkSize) buffer else buffer.copyOf(bytesRead)
                                                 if (client.sendChunk(uploadId, currentOffset, chunk)) {
                                                     currentOffset += bytesRead
-                                                    totalBytesTransferred.addAndGet(bytesRead.toLong())
-                                                    _syncProgress.value = _syncProgress.value.copy(bytesTransferred = totalBytesTransferred.get())
+                                                    mediaRepository.updateUploadProgress(item.id, currentOffset, item.size)
                                                 } else {
                                                     success = false
                                                 }
                                             }
                                             
+                                            // Verify we actually read the expected amount of data
+                                            if (currentOffset != item.size) {
+                                                Log.e(TAG, "Source file truncated: expected ${item.size}, got $currentOffset")
+                                                success = false
+                                            }
+
                                             if (success) {
                                                 if (client.finishUpload(uploadId, hash)) {
-                                                    mediaRepository.markAsSynced(item.id, hash)
+                                                    mediaRepository.markAsSynced(item.id, hash, item.size)
                                                 } else {
                                                     mediaRepository.markAsFailed(item.id, "Finalize Failed")
                                                 }
@@ -445,14 +531,23 @@ class EnhancedSyncService : Service() {
                                     if (e is CancellationException) throw e
                                     Log.e(TAG, "Error syncing ${item.name}", e)
                                     
+                                    // Move back to PENDING if network error, else FAILED
                                     val status = when (e) {
-                                        is java.io.IOException -> SyncStatus.PAUSED_NETWORK
-                                        else -> SyncStatus.ERROR
+                                        is java.io.FileNotFoundException -> SyncStatus.FAILED // File gone, don't retry
+                                        is IOException -> SyncStatus.PENDING // Retry later
+                                        else -> SyncStatus.FAILED
                                     }
-                                    val reason = if (status == SyncStatus.PAUSED_NETWORK) "Network issue" else (e.message ?: "Unknown error")
-                                    mediaRepository.markAsFailed(item.id, reason, status)
+                                    val reason = e.message ?: "Unknown error"
                                     
-                                    if (status == SyncStatus.PAUSED_NETWORK) {
+                                    if (status == SyncStatus.PENDING) {
+                                         // If PENDING, we just mark it as failed attempt but keep status PENDING (or rely on retry logic)
+                                         // Actually, updateStatusWithError increments retry count.
+                                         mediaRepository.markAsFailed(item.id, reason, status)
+                                    } else {
+                                         mediaRepository.markAsFailed(item.id, reason, status)
+                                    }
+
+                                    if (status == SyncStatus.PENDING) { // Network issue logic
                                         Log.w(TAG, "Stopping worker $workerId due to network issue")
                                         break
                                     }
@@ -460,22 +555,25 @@ class EnhancedSyncService : Service() {
                                 completedCount.incrementAndGet()
                             }
                         } catch (e: Exception) {
-                            if (e is CancellationException) throw e
-                            Log.e(TAG, "Worker $workerId fatal error", e)
+                             Log.e(TAG, "Worker $workerId fatal", e)
                         } finally {
                             client.disconnect()
                             activeClients.remove(client)
                         }
                     }
                 }
+                
+                // Wait for scanning to finish AND workers to finish
+                // Note: Workers finish when queue is empty AND scanning is done.
+                // So joinAll() covers both conditions effectively.
                 jobs.joinAll()
+                scanningJob.join() // Should be done by now, but good to be sure.
             }
             
             _syncState.value = SyncState.Idle
             updateNotification("Sync completed: ${completedCount.get()} files")
             _syncProgress.value = _syncProgress.value.copy(isActive = false)
             
-            // Update last successful backup timestamp
             if (completedCount.get() > 0) {
                 settingsManager.lastSuccessfulBackupTimestamp = System.currentTimeMillis()
             }
@@ -487,11 +585,12 @@ class EnhancedSyncService : Service() {
         }
     }
 
+    @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
     private suspend fun performReconciliation() {
         _syncState.value = SyncState.Reconciling
         updateNotification("Reconciling sync status...")
         
-        val settingsManager = com.photosync.android.data.SettingsManager(this)
+        val settingsManager = SettingsManager(this)
         val serverIp = settingsManager.serverIp
         
         if (serverIp.isBlank()) {
@@ -510,6 +609,10 @@ class EnhancedSyncService : Service() {
             val mediaItems = mediaRepository.getAllMediaItems()
             
             // Calculate hashes for items that don't have them
+            // Initialize all items in DB to stabilize totalBytes denominator
+            val statusMap = mediaRepository.getSyncStatusMap()
+            mediaRepository.initializeSyncStatus(mediaItems, statusMap)
+
             val itemsWithHashes = mediaItems.map { item ->
                 val hash = if (item.hash.isEmpty()) {
                     mediaRepository.calculateHash(item.uri)
@@ -599,7 +702,7 @@ class EnhancedSyncService : Service() {
                 debounceJob = serviceScope.launch {
                     delay(5000) // Debounce 5 seconds
                     Log.i(TAG, "Triggering auto-sync after debounce")
-                    startSync()
+                    requestSync("CONTENT_CHANGE", manual = false)
                 }
             }
         }
@@ -646,6 +749,7 @@ class EnhancedSyncService : Service() {
     
     private val notificationLimiter = com.photosync.android.util.RateLimiter(500)
     
+    @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
     private fun updateNotification(content: String) {
         // Throttle updates unless "Sync completed"
         if (!content.contains("Sync completed") && !notificationLimiter.tryAcquire()) {
@@ -653,7 +757,7 @@ class EnhancedSyncService : Service() {
         }
         
         val notification = createNotification(content)
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification)
     }
     
@@ -714,22 +818,41 @@ class EnhancedSyncService : Service() {
         // Charging
         if (settings.chargingOnly) {
              val batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-             if (!batteryManager.isCharging) return false
+             if (!batteryManager.isCharging) {
+                 Log.w(TAG, "Constraint Init Failed: Not Charging")
+                 return false
+             }
         }
         
         // Battery Threshold (only if not charging)
         val batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         if (!batteryManager.isCharging) {
              val level = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-             if (level < settings.batteryThreshold) return false
+             if (level < settings.batteryThreshold) {
+                 Log.w(TAG, "Constraint Init Failed: Low Battery ($level < ${settings.batteryThreshold})")
+                 return false
+             }
         }
         
-        // Wifi (Already handled by network callback mostly, but good to check)
+        if (!isNetworkAvailable(settings)) {
+             Log.w(TAG, "Constraint Init Failed: No Network/Wifi")
+             return false
+        }
+        
+        return true
+    }
+
+    private fun isNetworkAvailable(settings: SettingsManager): Boolean {
+        val caps = connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
+        if (caps == null || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+            return false
+        }
+        
         if (settings.wifiOnly) {
-             val caps = connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
-             if (caps == null || !caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return false
+             if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+                 return false
+             }
         }
-        
         return true
     }
 }

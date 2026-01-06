@@ -25,6 +25,14 @@ import com.photosync.android.ui.screens.HomeScreen
 import com.photosync.android.ui.screens.PairingScreen
 import com.photosync.android.ui.screens.SettingsScreen
 import com.photosync.android.ui.screens.SyncStatusScreen
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
+
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
     data object Home : Screen("home", "Home", Icons.Default.Home)
@@ -34,6 +42,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
     data object Pairing : Screen("pairing", "Pairing", Icons.Default.QrCode)
 }
 
+
 @Composable
 fun PhotoSyncNavigation(
     startDestination: String = Screen.Home.route,
@@ -41,15 +50,117 @@ fun PhotoSyncNavigation(
 ) {
     val navController = rememberNavController()
     
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+
+    val mainScreens = listOf(
+        Screen.Home,
+        Screen.Gallery,
+        Screen.Sync,
+        Screen.Settings
+    )
+
     Scaffold(
         bottomBar = {
             BottomNavigationBar(navController = navController)
         }
     ) { paddingValues ->
+        // Swipe State
+        var totalDrag = 0f
+        val minSwipeThreshold = 200f // pixels
+
         NavHost(
             navController = navController,
             startDestination = startDestination,
-            modifier = Modifier.padding(paddingValues)
+            enterTransition = {
+                val initialIndex = mainScreens.indexOfFirst { it.route == initialState.destination.route }
+                val targetIndex = mainScreens.indexOfFirst { it.route == targetState.destination.route }
+                if (initialIndex != -1 && targetIndex != -1) {
+                    if (targetIndex > initialIndex) {
+                        slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(300)) + fadeIn(animationSpec = tween(300))
+                    } else {
+                        slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(300)) + fadeIn(animationSpec = tween(300))
+                    }
+                } else {
+                    fadeIn(animationSpec = tween(300))
+                }
+            },
+            exitTransition = {
+                val initialIndex = mainScreens.indexOfFirst { it.route == initialState.destination.route }
+                val targetIndex = mainScreens.indexOfFirst { it.route == targetState.destination.route }
+                if (initialIndex != -1 && targetIndex != -1) {
+                    if (targetIndex > initialIndex) {
+                        slideOutHorizontally(targetOffsetX = { -it }, animationSpec = tween(300)) + fadeOut(animationSpec = tween(300))
+                    } else {
+                        slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(300)) + fadeOut(animationSpec = tween(300))
+                    }
+                } else {
+                    fadeOut(animationSpec = tween(300))
+                }
+            },
+            popEnterTransition = {
+                val initialIndex = mainScreens.indexOfFirst { it.route == initialState.destination.route }
+                val targetIndex = mainScreens.indexOfFirst { it.route == targetState.destination.route }
+                if (initialIndex != -1 && targetIndex != -1) {
+                     if (targetIndex > initialIndex) {
+                        slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(300)) + fadeIn(animationSpec = tween(300))
+                    } else {
+                        slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(300)) + fadeIn(animationSpec = tween(300))
+                    }
+                } else {
+                    fadeIn(animationSpec = tween(300))
+                }
+            },
+            popExitTransition = {
+                val initialIndex = mainScreens.indexOfFirst { it.route == initialState.destination.route }
+                val targetIndex = mainScreens.indexOfFirst { it.route == targetState.destination.route }
+                if (initialIndex != -1 && targetIndex != -1) {
+                    if (targetIndex > initialIndex) {
+                        slideOutHorizontally(targetOffsetX = { -it }, animationSpec = tween(300)) + fadeOut(animationSpec = tween(300))
+                    } else {
+                        slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(300)) + fadeOut(animationSpec = tween(300))
+                    }
+                } else {
+                    fadeOut(animationSpec = tween(300))
+                }
+            },
+            modifier = Modifier
+                .padding(paddingValues)
+                .pointerInput(currentRoute) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            if (totalDrag > minSwipeThreshold) {
+                                // Right Swipe -> Previous Screen
+                                val currentIndex = mainScreens.indexOfFirst { it.route == currentRoute }
+                                if (currentIndex > 0) {
+                                    val prevScreen = mainScreens[currentIndex - 1]
+                                    navController.navigate(prevScreen.route) {
+                                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
+                                }
+                            } else if (totalDrag < -minSwipeThreshold) {
+                                // Left Swipe -> Next Screen
+                                val currentIndex = mainScreens.indexOfFirst { it.route == currentRoute }
+                                if (currentIndex != -1 && currentIndex < mainScreens.lastIndex) {
+                                    val nextScreen = mainScreens[currentIndex + 1]
+                                    navController.navigate(nextScreen.route) {
+                                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
+                                }
+                            }
+                            totalDrag = 0f
+                        },
+                        onDragCancel = { totalDrag = 0f },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            totalDrag += dragAmount
+                        }
+                    )
+                }
         ) {
             composable(Screen.Home.route) {
                 HomeScreen(
@@ -101,8 +212,6 @@ fun PhotoSyncNavigation(
                     }
                 )
             }
-
-
         }
     }
 }

@@ -35,6 +35,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _autoSyncEnabled = MutableStateFlow(settings.autoSyncEnabled)
     val autoSyncEnabled: StateFlow<Boolean> = _autoSyncEnabled.asStateFlow()
     
+    private val _userAvatarUri = MutableStateFlow(settings.userAvatarUri)
+    val userAvatarUri: StateFlow<String> = _userAvatarUri.asStateFlow()
+    
     // Reliability
     private val _wifiOnly = MutableStateFlow(settings.wifiOnly)
     val wifiOnly: StateFlow<Boolean> = _wifiOnly.asStateFlow()
@@ -62,6 +65,30 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         _userName.value = name
         // Save immediately to preferences
         settings.userName = name
+    }
+
+    fun updateUserAvatar(uri: android.net.Uri) {
+        viewModelScope.launch {
+            try {
+                // Copy to internal storage to persist access
+                val inputStream = context.contentResolver.openInputStream(uri)
+                val file = java.io.File(context.filesDir, "profile_avatar.jpg")
+                
+                inputStream?.use { input ->
+                    file.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                
+                // Append timestamp to force StateFlow emission and cache busting
+                val savedUri = android.net.Uri.fromFile(file).toString() + "?t=${System.currentTimeMillis()}"
+                _userAvatarUri.value = savedUri
+                settings.userAvatarUri = savedUri
+            } catch (e: Exception) {
+                // Handle error
+                e.printStackTrace()
+            }
+        }
     }
 
     fun updateAutoSyncEnabled(enabled: Boolean) {

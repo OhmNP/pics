@@ -9,7 +9,8 @@ import com.photosync.android.data.dao.SyncStatusDao
 import com.photosync.android.data.entity.ServerConfigEntity
 import com.photosync.android.data.entity.SyncStatusEntity
 
-@Database(entities = [com.photosync.android.data.entity.SyncStatusEntity::class, com.photosync.android.data.entity.ServerConfigEntity::class], version = 3, exportSchema = false)
+@Database(entities = [com.photosync.android.data.entity.SyncStatusEntity::class, com.photosync.android.data.entity.ServerConfigEntity::class], version = 5, exportSchema = false)
+@androidx.room.TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     
     abstract fun syncStatusDao(): SyncStatusDao

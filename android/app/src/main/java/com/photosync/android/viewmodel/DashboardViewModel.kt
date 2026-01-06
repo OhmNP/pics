@@ -7,26 +7,31 @@ import androidx.lifecycle.viewModelScope
 import com.photosync.android.data.AppDatabase
 import com.photosync.android.model.SyncProgress
 import com.photosync.android.repository.MediaRepository
+import com.photosync.android.repository.SyncProgressRepository
 import com.photosync.android.service.EnhancedSyncService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 class DashboardViewModel(application: Application) : AndroidViewModel(application) {
     
     private val mediaRepository: MediaRepository
+    private val syncProgressRepository: SyncProgressRepository
     private val database: AppDatabase
     
     // Local state that reflects the service state + fallback
     private val _syncState = MutableStateFlow<EnhancedSyncService.SyncState>(EnhancedSyncService.SyncState.Idle)
     val syncState: StateFlow<EnhancedSyncService.SyncState> = _syncState.asStateFlow()
 
-    private val _syncProgress = MutableStateFlow(SyncProgress())
-    val syncProgress: StateFlow<SyncProgress> = _syncProgress.asStateFlow()
+    private val _serviceProgress = MutableStateFlow(SyncProgress())
+    
+    // Unified Progress Flow from DB
+    val syncProgress: StateFlow<SyncProgress> by lazy {
+        syncProgressRepository.syncProgressFlow
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SyncProgress())
+    }
 
     private val _serverStatus = MutableStateFlow(EnhancedSyncService.ServerConnectivityStatus.DISCONNECTED)
     val serverStatus: StateFlow<EnhancedSyncService.ServerConnectivityStatus> = _serverStatus.asStateFlow()
@@ -40,10 +45,9 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     init {
         database = AppDatabase.getDatabase(application)
         mediaRepository = MediaRepository(application, database)
+        syncProgressRepository = SyncProgressRepository(database.syncStatusDao())
         monitorServiceState()
         updateStorageInfo()
-        // Refresh username when it might change (simplified for now, just load on init)
-        // Ideally observe prefs change or reload on resume
     }
     
     private fun monitorServiceState() {
@@ -61,15 +65,13 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                     
                     collectionJob = launch {
                         launch { service.syncState.collect { _syncState.value = it } }
-                        launch { service.syncProgress.collect { _syncProgress.value = it } }
+                        launch { service.syncProgress.collect { _serviceProgress.value = it } }
                         launch { service.serverStatus.collect { _serverStatus.value = it } }
                     }
                 } else if (service == null) {
                     currentService = null
                     collectionJob?.cancel()
                     collectionJob = null
-                    // Optional: reset to default states if service dies?
-                    // _serverStatus.value = EnhancedSyncService.ServerConnectivityStatus.DISCONNECTED
                 }
                 
                 delay(1000)
@@ -77,40 +79,67 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
     
-
-    
-    val syncedCount = mediaRepository.getSyncedCount()
-    val pendingCount = mediaRepository.getPendingCount()
-    val failedCount = mediaRepository.getFailedCount()
-    val inProgressCount = mediaRepository.getInProgressCount()
-    
     private val _storageUsage = MutableStateFlow(0f)
     val storageUsage: StateFlow<Float> = _storageUsage.asStateFlow()
+    
+    private val _storageString = MutableStateFlow("Calculating...")
+    val storageString: StateFlow<String> = _storageString.asStateFlow()
 
     private fun updateStorageInfo() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val path = android.os.Environment.getDataDirectory()
-                val stat = android.os.StatFs(path.path)
-                val blockSize = stat.blockSizeLong
-                val totalBlocks = stat.blockCountLong
-                val availableBlocks = stat.availableBlocksLong
+                val storageStatsManager = getApplication<Application>().getSystemService(android.content.Context.STORAGE_STATS_SERVICE) as android.app.usage.StorageStatsManager
+                val storageManager = getApplication<Application>().getSystemService(android.content.Context.STORAGE_SERVICE) as android.os.storage.StorageManager
                 
-                val totalSpace = totalBlocks * blockSize
-                val availableSpace = availableBlocks * blockSize
-                val usedSpace = totalSpace - availableSpace
+                // UUID_DEFAULT works for Internal Storage on most modern Android versions
+                val uuid = android.os.storage.StorageManager.UUID_DEFAULT
+                
+                val totalSpace = storageStatsManager.getTotalBytes(uuid)
+                val freeSpace = storageStatsManager.getFreeBytes(uuid)
+                val usedSpace = totalSpace - freeSpace
                 
                 if (totalSpace > 0) {
                     _storageUsage.value = usedSpace.toFloat() / totalSpace.toFloat()
+                    
+                    // Use Decimal GB (1000^3) to match Android Settings / Box specs
+                    val divisor = 1000f * 1000f * 1000f
+                    val rawTotalGB = totalSpace / divisor
+                    val usedGB = usedSpace / divisor
+                    
+                    // Round to standard storage sizes (32, 64, 128, 256, 512, 1024)
+                    // If simple rounding is close, snap to it.
+                    val rawTotalInt = rawTotalGB.toInt()
+                    val standardSizes = listOf(32, 64, 128, 256, 512, 1024)
+                    val standardTotalGB = standardSizes.firstOrNull { size -> 
+                        // Allow ~10% variance for overhead
+                        rawTotalGB > (size * 0.9) && rawTotalGB < (size * 1.1)
+                    } ?: rawTotalGB // Fallback to raw if weird size
+
+                    _storageString.value = String.format("%.1f / %s GB", usedGB, 
+                        if (standardTotalGB is Int) standardTotalGB.toString() else String.format("%.1f", standardTotalGB))
                 }
             } catch (e: Exception) {
                 android.util.Log.e("DashboardViewModel", "Failed to get storage info", e)
+                _storageString.value = "Unknown"
             }
         }
     }
 
     private val _lastSuccessfulBackup = MutableStateFlow(settings.lastSuccessfulBackupTimestamp)
     val lastSuccessfulBackup: StateFlow<Long> = _lastSuccessfulBackup.asStateFlow()
+
+    val lastSyncTimeFormatted: StateFlow<String> by lazy {
+        mediaRepository.getLastSyncTimeFlow()
+            .map { timestamp ->
+                if (timestamp != null && timestamp > 0) {
+                     val sdf = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+                     sdf.format(java.util.Date(timestamp))
+                } else {
+                    "Never"
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Never")
+    }
     
     val recentUploads = mediaRepository.getRecentSyncedMedia(10)
     

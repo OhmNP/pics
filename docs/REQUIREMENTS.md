@@ -48,12 +48,7 @@ To provide a fast, private, and reliable solution for backing up mobile photos t
 *   **Auto-Refresh**: Metrics update automatically every 30 seconds.
 *   **Historical Trends**: Storage usage trends over last 24 hours.
 
-### 2.5. Audit Logging & Compliance
-*   **Action Tracking**: All admin actions logged with timestamp, user, action type.
-*   **Immutability**: Audit logs cannot be edited or deleted from dashboard.
-*   **Retention**: Configurable retention policy (default 90 days for audit logs).
-*   **Export**: Audit logs can be exported as JSON for compliance reporting.
-*   **Filtering**: Filter audit logs by date, user, action type.
+
 
 ### 3. Android Client
 *   **Status Dashboard**: Immediate visual feedback on connection status and sync progress.

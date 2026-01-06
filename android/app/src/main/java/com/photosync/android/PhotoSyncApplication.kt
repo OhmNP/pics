@@ -24,6 +24,11 @@ class PhotoSyncApplication : Application() {
     fun scheduleSyncWorker() {
         val settings = SettingsManager(this)
         
+        if (!settings.autoSyncEnabled) {
+            WorkManager.getInstance(this).cancelUniqueWork("PhotoSyncWorker")
+            return
+        }
+        
         val constraintsBuilder = Constraints.Builder()
             
         if (settings.wifiOnly) {

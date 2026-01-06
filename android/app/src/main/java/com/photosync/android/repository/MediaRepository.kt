@@ -1,4 +1,4 @@
-package com.photosync.android.repository
+﻿package com.photosync.android.repository
 
 import android.content.ContentResolver
 import android.content.ContentUris
@@ -11,12 +11,15 @@ import com.photosync.android.data.AppDatabase
 import com.photosync.android.data.entity.SyncStatus
 import com.photosync.android.data.entity.SyncStatusEntity
 import com.photosync.android.model.MediaItem
+import com.photosync.android.ui.gallery.GalleryFilter
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import java.security.MessageDigest
 
 import android.content.Context
 import com.photosync.android.data.SettingsManager
+import com.photosync.android.model.GalleryStats
 
 class MediaRepository(
     private val context: Context,
@@ -32,15 +35,76 @@ class MediaRepository(
     /**
      * Get paged media items with sync status
      */
-    fun getPagedMediaWithStatus(query: String = ""): Flow<PagingData<MediaItem>> {
+    fun getPagedMediaWithStatus(query: String = "", filter: GalleryFilter = GalleryFilter.DISCOVERED): Flow<PagingData<MediaItem>> {
         return Pager(
             config = PagingConfig(
                 pageSize = 50,
                 enablePlaceholders = false
             ),
-            pagingSourceFactory = { MediaPagingSource(contentResolver, syncStatusDao, query) }
+            pagingSourceFactory = { 
+                var failedIds: List<String>? = null
+                if (filter == GalleryFilter.FAILED) {
+                    try {
+                        val potentialIds = kotlinx.coroutines.runBlocking {
+                            syncStatusDao.getByStatus(com.photosync.android.data.entity.SyncStatus.FAILED, 1000)
+                                .map { it.mediaId } + 
+                            syncStatusDao.getByStatus(com.photosync.android.data.entity.SyncStatus.ERROR, 1000)
+                                .map { it.mediaId }
+                        }
+                        
+                        // Verify existence in MediaStore to prune orphans (deleted files)
+                        if (potentialIds.isNotEmpty()) {
+                            val verifiedIds = mutableListOf<String>()
+                            val orphanedIds = mutableListOf<String>()
+                            
+                            val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                            val projection = arrayOf(MediaStore.Images.Media._ID)
+                            // Batch check: "ID IN (...)"
+                            // Split into chunks if needed, but 1000 is okay-ish for SQLite limit (usually 999 params).
+                            // Let's do a safe loop check or just query all and intersect.
+                            // Querying ALL is safest if list is small.
+                             val idStr = potentialIds.joinToString(",") { "?" }
+                             val selection = "${MediaStore.Images.Media._ID} IN ($idStr)"
+                             val args = potentialIds.toTypedArray()
+                             
+                             contentResolver.query(uri, projection, selection, args, null)?.use { cursor ->
+                                 val idCol = cursor.getColumnIndex(MediaStore.Images.Media._ID)
+                                 while (cursor.moveToNext()) {
+                                     verifiedIds.add(cursor.getString(idCol))
+                                 }
+                             }
+                             
+                             // Calculate orphans
+                             orphanedIds.addAll(potentialIds.filter { !verifiedIds.contains(it) })
+                             
+                             if (orphanedIds.isNotEmpty()) {
+                                 // Cleanup orphans
+                                 kotlinx.coroutines.runBlocking {
+                                     // We can't batch delete easily by ID list in DAO yet? 
+                                     // Standard Room DELETE FROM x WHERE id IN (list)
+                                     // For now, iterate loop delete is fine for corner case.
+                                     orphanedIds.forEach { syncStatusDao.deleteSyncStatus(it) }
+                                 }
+                             }
+                             
+                             failedIds = verifiedIds
+                        } else {
+                            failedIds = emptyList()
+                        }
+                    } catch (e: Exception) {
+                        failedIds = emptyList()
+                    }
+                }
+                
+                MediaPagingSource(contentResolver, syncStatusDao, query, failedIds, filter) 
+            }
         ).flow
     }
+
+    /**
+     * Get flow of sync status aggregates that affect filter consistency
+     */
+    fun getFilterConsistencyFlow(): Flow<String> = syncStatusDao.getFilterConsistencyToken()
     
     /**
      * Get all media items (for sync operations)
@@ -100,10 +164,10 @@ class MediaRepository(
                             uri = contentUri,
                             name = name,
                             size = size,
-                            lastModified = modified,
+                            lastModified = modified * 1000L,
                             path = path,
                             hash = syncStatus?.hash ?: "",
-                            syncStatus = syncStatus?.syncStatus ?: SyncStatus.PENDING
+                            syncStatus = syncStatus?.syncStatus
                         )
                     )
                 }
@@ -113,6 +177,40 @@ class MediaRepository(
         return items
     }
     
+    /**
+     * Get specific media item by ID
+     */
+    suspend fun getMediaItem(id: String): MediaItem? {
+        val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id.toLong())
+        val projection = arrayOf(
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.SIZE,
+            MediaStore.Images.Media.DATE_MODIFIED,
+            MediaStore.Images.Media.DATA
+        )
+        
+        return contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val name = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
+                val size = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE))
+                val modified = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED))
+                val path = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA))
+                val status = syncStatusDao.getSyncStatus(id)
+                
+                MediaItem(
+                    id = id,
+                    uri = uri,
+                    name = name,
+                    size = size,
+                    lastModified = modified * 1000L,
+                    path = path,
+                    hash = status?.hash ?: "",
+                    syncStatus = status?.syncStatus ?: SyncStatus.DISCOVERED
+                )
+            } else null
+        }
+    }
+
     /**
      * Calculate SHA-256 hash for a media item
      */
@@ -131,14 +229,21 @@ class MediaRepository(
     /**
      * Update sync status for a media item
      */
-    suspend fun updateSyncStatus(mediaId: String, hash: String, status: SyncStatus) {
+    suspend fun updateSyncStatus(mediaId: String, hash: String, status: SyncStatus, size: Long = 0) {
+        val existing = syncStatusDao.getSyncStatus(mediaId)
         syncStatusDao.insertSyncStatus(
             SyncStatusEntity(
                 mediaId = mediaId,
                 hash = hash,
-                syncStatus = status
+                syncStatus = status,
+                fileSize = if (size > 0) size else existing?.fileSize ?: 0,
+                lastKnownOffset = existing?.lastKnownOffset ?: 0
             )
         )
+    }
+
+    suspend fun updateUploadProgress(mediaId: String, offset: Long, size: Long) {
+        syncStatusDao.updateUploadProgress(mediaId, offset, size)
     }
     
     /**
@@ -156,25 +261,149 @@ class MediaRepository(
         syncStatusDao.pauseUploadingItems(SyncStatus.PAUSED_NETWORK, reason)
     }
     
-    suspend fun markAsSynced(mediaId: String, hash: String) {
+    suspend fun markAsSynced(mediaId: String, hash: String, size: Long = 0) {
          // Reset retry count on success
-         syncStatusDao.resetRetryStatus(mediaId, System.currentTimeMillis(), SyncStatus.SYNCED)
-         // Also ensure hash is updated if it wasn't
-         // But resetRetryStatus doesn't update hash. 
-         // We might need a proper upsert. For now, let's just insertSyncStatus if we need to set hash,
-         // but resetRetryStatus is better for just state update.
-         // Actually, let's use insertSyncStatus but with 0 retry count explicitly
+         val existing = syncStatusDao.getSyncStatus(mediaId)
          syncStatusDao.insertSyncStatus(
             SyncStatusEntity(
                 mediaId = mediaId,
                 hash = hash,
                 syncStatus = SyncStatus.SYNCED,
+                fileSize = if (size > 0) size else existing?.fileSize ?: 0,
                 retryCount = 0,
                 lastAttemptTimestamp = System.currentTimeMillis()
             )
         )
     }
     
+    suspend fun getSyncStatusMap(): Map<String, SyncStatus> {
+        return syncStatusDao.getAllSyncStatuses().associate { entity -> entity.mediaId to entity.syncStatus }
+    }
+
+    fun getSyncStatusMapFlow(): Flow<Map<String, SyncStatus>> {
+        return syncStatusDao.getAllSyncStatusesFlow()
+            .map { list -> list.associate { it.mediaId to it.syncStatus } }
+            .distinctUntilChanged()
+    }
+
+    private val mediaScanner = MediaScanner(context, syncStatusDao)
+
+    /**
+     * Run full scan for new media
+     */
+    suspend fun scanForNewMedia(targetStatus: SyncStatus = SyncStatus.DISCOVERED) {
+        mediaScanner.scan(targetStatus)
+    }
+    
+    /**
+     * Queue all discovered items for upload (DISCOVERED -> PENDING)
+     */
+    suspend fun queueAllDiscovered() {
+        val discoveredItems = syncStatusDao.getByStatus(SyncStatus.DISCOVERED, 1000) // Batch of 1000
+        if (discoveredItems.isNotEmpty()) {
+            val ids = discoveredItems.map { it.mediaId }
+            syncStatusDao.markAsPending(ids)
+            // Recursively queue more if needed, or rely on next service loop
+        }
+    }
+    
+    /**
+     * Claim next pending item for upload (PENDING -> UPLOADING)
+     */
+    suspend fun claimNextPendingItem(): MediaItem? {
+        val entity = syncStatusDao.claimNextPending() ?: return null
+        
+        // Convert to MediaItem
+        try {
+            val uri = ContentUris.withAppendedId(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                entity.mediaId.toLong()
+            )
+            // Need to fetch metadata (name, size) since Entity might be stale or minimal
+            // Optimization: Entity has fileSize, but not Name. 
+            // We should fetch from MediaStore to be safe.
+             val projection = arrayOf(
+                MediaStore.Images.Media.DISPLAY_NAME,
+                MediaStore.Images.Media.DATA
+            )
+             var name = "Unknown"
+             var path = ""
+             contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                 if (cursor.moveToFirst()) {
+                     name = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)) ?: "Unknown"
+                     path = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)) ?: ""
+                 }
+             }
+             
+             return MediaItem(
+                 id = entity.mediaId,
+                 uri = uri,
+                 name = name,
+                 size = entity.fileSize,
+                 lastModified = entity.lastUpdated,
+                 path = path,
+                 hash = entity.hash,
+                 syncStatus = SyncStatus.UPLOADING,
+                 lastKnownOffset = entity.lastKnownOffset,
+                 uploadId = entity.uploadId
+             )
+        } catch (e: Exception) {
+            // If MediaStore lookup fails (item deleted?), mark as FAILED
+            syncStatusDao.updateStatusWithError(entity.mediaId, System.currentTimeMillis(), "MediaStore lookup failed", SyncStatus.FAILED)
+            return null
+        }
+    }
+
+    suspend fun initializeSyncStatus(items: List<MediaItem>, statusMap: Map<String, SyncStatus>) {
+         // Legacy: This was used to bulk-insert PENDING status.
+         // Now we should prefer scanning. 
+         // But for backward compatibility or reset, strictly insert if missing.
+         // Implemented via MediaScanner loop usually.
+         // We'll leave this as a "Soft Scan" or "Import" function.
+    }
+
+    /**
+     * Get flow of all sync statuses (for aggregation)
+     */
+    fun getAllSyncStatusesFlow(): Flow<List<SyncStatusEntity>> {
+        return syncStatusDao.getAllSyncStatusesFlow()
+    }
+
+
+
+    /**
+     * Get snapshot of gallery stats
+     */
+    suspend fun getSyncStats(): GalleryStats {
+        val all = syncStatusDao.getAllSyncStatuses()
+        // Note: SyncStatus table only tracks items that have been interacted with (uploaded, pending, etc)
+        // It does NOT track all "Discovered" items in MediaStore if they haven't been queued yet.
+        // So "Total Items" might be misleading if based only on DB. 
+        // Ideally we query MediaStore count, but that's expensive to do constantly.
+        // For now, we will report stats on "Tracked Items". 
+        // Or we can say "Pending: X, Uploading: Y, Failed: Z" and ignore Total.
+        
+        return GalleryStats(
+            totalItems = all.size,
+            syncedItems = all.count { it.syncStatus == SyncStatus.SYNCED },
+            pendingItems = all.count { it.syncStatus == SyncStatus.PENDING },
+            uploadingItems = all.count { it.syncStatus == SyncStatus.UPLOADING },
+            failedItems = all.count { it.syncStatus == SyncStatus.FAILED || it.syncStatus == SyncStatus.ERROR }
+        )
+    }
+
+    fun getSyncStatsFlow(): Flow<GalleryStats> {
+        return syncStatusDao.getSyncAggregates().map { agg ->
+            GalleryStats(
+                totalItems = agg.syncedCount + agg.pendingCount + agg.uploadingCount + agg.failedCount, // Approximation
+                syncedItems = agg.syncedCount,
+                pendingItems = agg.pendingCount,
+                uploadingItems = agg.uploadingCount,
+                failedItems = agg.failedCount
+            )
+        }.distinctUntilChanged()
+    }
+
     /**
      * Get synced count
      */
@@ -188,6 +417,23 @@ class MediaRepository(
     fun getFailedCount(): Flow<Int> = syncStatusDao.getFailedCount()
 
     fun getInProgressCount(): Flow<Int> = syncStatusDao.getInProgressCount()
+
+    /**
+     * Get real-time upload progress for active items
+     * Returns a map of MediaID -> Progress (0.0 - 1.0)
+     */
+    fun getUploadingProgress(): Flow<Map<String, Float>> {
+        return syncStatusDao.getUploadingItems().map { items ->
+            items.associate { entity ->
+                val progress = if (entity.fileSize > 0) {
+                    (entity.lastKnownOffset.toFloat() / entity.fileSize.toFloat()).coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+                entity.mediaId to progress
+            }
+        }
+    }
 
     /**
      * Get recently synced media items
@@ -222,7 +468,7 @@ class MediaRepository(
                                 uri = uri,
                                 name = name,
                                 size = 0, // Not needed for thumbnail
-                                lastModified = modified,
+                                lastModified = modified * 1000L,
                                 path = "", // Not needed
                                 hash = entity.hash,
                                 syncStatus = SyncStatus.SYNCED
@@ -240,20 +486,20 @@ class MediaRepository(
     /**
      * Queue selected media items for manual upload
      */
-    suspend fun queueManualUpload(mediaIds: List<String>) {
+    suspend fun queueManualUpload(mediaIds: List<String>): Int {
+        var queuedCount = 0
         for (id in mediaIds) {
             try {
+                // Check existing status first
+                val existing = syncStatusDao.getSyncStatus(id)
+                if (existing?.syncStatus == SyncStatus.SYNCED) {
+                    continue // Skip already synced items
+                }
+
                 val uri = ContentUris.withAppendedId(
                     MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                     id.toLong()
                 )
-                
-                val existing = syncStatusDao.getSyncStatus(id)
-                
-                // If already synced, we might want to skip or re-calculate. 
-                // UX Req: "If item already SYNCED -> show “Already backed up” and skip (or mark as SYNCED without re-upload)"
-                // Actually, the easiest way to "re-queue" is to set it to PENDING.
-                // If it's already SYNCED on server, the dedupe in TcpSyncClient will skip it anyway.
                 
                 val hash = if (existing?.hash.isNullOrEmpty()) {
                     calculateHash(uri)
@@ -261,21 +507,36 @@ class MediaRepository(
                     existing!!.hash
                 }
                 
-                // Reset errors and set to PENDING
+                // Ensure we have the correct file size
+                var fileSize = existing?.fileSize ?: 0L
+                if (fileSize <= 0) {
+                     try {
+                         context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                             fileSize = pfd.statSize
+                         }
+                     } catch (e: Exception) {
+                         android.util.Log.e("MediaRepository", "Failed to get size for $uri", e)
+                     }
+                }
+
                 syncStatusDao.insertSyncStatus(
                     SyncStatusEntity(
                         mediaId = id,
                         hash = hash,
                         syncStatus = SyncStatus.PENDING,
+                        fileSize = fileSize,
+                        uploadId = existing?.uploadId,
+                        lastKnownOffset = 0, // Force restart signal
                         retryCount = 0,
-                        lastAttemptTimestamp = System.currentTimeMillis()
+                        lastAttemptTimestamp = System.currentTimeMillis(),
+                        queuedAt = System.currentTimeMillis()
                     )
                 )
+                queuedCount++
             } catch (e: Exception) {
                 android.util.Log.e("MediaRepository", "Failed to queue $id", e)
             }
         }
-        
         // Trigger Sync via Service
         val intent = android.content.Intent(context, com.photosync.android.service.EnhancedSyncService::class.java).apply {
             action = com.photosync.android.service.EnhancedSyncService.ACTION_START_SYNC
@@ -285,5 +546,18 @@ class MediaRepository(
         } else {
             context.startService(intent)
         }
+
+        return queuedCount
+    }
+    
+    fun getLastSyncTimeFlow(): Flow<Long?> = syncStatusDao.getLastSuccessfulSyncTime()
+
+    suspend fun resumePendingFromNetworkPause() {
+        syncStatusDao.resumePausedItems(SyncStatus.PAUSED_NETWORK)
+    }
+    
+    suspend fun resetStuckUploadingToPending() {
+        syncStatusDao.pauseUploadingItems(SyncStatus.PENDING, "Service Restart")
     }
 }
+

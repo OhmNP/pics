@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -41,30 +42,12 @@ fun GlassCard(
 ) {
     Box(
         modifier = modifier
-            .graphicsLayer {
-                shadowElevation = glowRadius.toPx()
-                shape = RoundedCornerShape(cornerRadius)
-                clip = false
-            }
-            .drawBehind {
-                drawRoundRect(
-                    color = glowColor,
-                    cornerRadius = CornerRadius(cornerRadius.toPx()),
-                    alpha = 0.5f
-                )
-            }
             .clip(RoundedCornerShape(cornerRadius))
             .background(
-                Brush.linearGradient(
+                brush = Brush.linearGradient(
                     colors = gradientColors,
-                    start = Offset(0f, 0f),
-                    end = Offset(600f, 600f)
-                )
-            ) .background(
-                Brush.radialGradient(
-                    colors = gradientColors,
-                    radius = 550f,
-                    center = Offset(150f, 80f) // slight offset gives realism
+                    start = Offset.Zero,
+                    end = Offset.Infinite
                 )
             )
             .border( width = 2.dp,

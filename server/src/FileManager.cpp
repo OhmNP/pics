@@ -407,7 +407,7 @@ std::string FileManager::generatePhotoPath(const PhotoMetadata &metadata) {
 // Phase 2: Resumable Uploads
 
 std::string FileManager::getUploadTempPath(const std::string &uploadId) {
-  return getTempDir() + "/" + uploadId;
+  return getTempDir() + "/" + uploadId + ".tmp";
 }
 
 bool FileManager::appendChunk(const std::string &uploadId,

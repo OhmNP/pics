@@ -135,16 +135,40 @@ class SyncStatusDaoTest {
     fun getFailedCount_returnsCorrectCount() = runBlocking {
         // Insert multiple items with different statuses
         syncStatusDao.insertSyncStatus(
-            SyncStatusEntity("id1", "hash1", SyncStatus.ERROR, System.currentTimeMillis(), 1, 0L, "Error")
+            SyncStatusEntity(
+                mediaId = "id1",
+                hash = "hash1",
+                syncStatus = SyncStatus.ERROR,
+                lastAttemptTimestamp = System.currentTimeMillis(),
+                retryCount = 1,
+                failureReason = "Error"
+            )
         )
         syncStatusDao.insertSyncStatus(
-            SyncStatusEntity("id2", "hash2", SyncStatus.ERROR, System.currentTimeMillis(), 2, 0L, "Error")
+            SyncStatusEntity(
+                mediaId = "id2",
+                hash = "hash2",
+                syncStatus = SyncStatus.ERROR,
+                lastAttemptTimestamp = System.currentTimeMillis(),
+                retryCount = 2,
+                failureReason = "Error"
+            )
         )
         syncStatusDao.insertSyncStatus(
-            SyncStatusEntity("id3", "hash3", SyncStatus.SYNCED, System.currentTimeMillis(), 0, 0L, null)
+            SyncStatusEntity(
+                mediaId = "id3",
+                hash = "hash3",
+                syncStatus = SyncStatus.SYNCED,
+                lastAttemptTimestamp = System.currentTimeMillis()
+            )
         )
         syncStatusDao.insertSyncStatus(
-            SyncStatusEntity("id4", "hash4", SyncStatus.PENDING, System.currentTimeMillis(), 0, 0L, null)
+            SyncStatusEntity(
+                mediaId = "id4",
+                hash = "hash4",
+                syncStatus = SyncStatus.PENDING,
+                lastAttemptTimestamp = System.currentTimeMillis()
+            )
         )
         
         val failedCount = syncStatusDao.getFailedCount().first()
@@ -155,10 +179,20 @@ class SyncStatusDaoTest {
     @Test
     fun getFailedCount_returnsZeroWhenNoErrors() = runBlocking {
         syncStatusDao.insertSyncStatus(
-            SyncStatusEntity("id1", "hash1", SyncStatus.SYNCED, System.currentTimeMillis(), 0, 0L, null)
+            SyncStatusEntity(
+                mediaId = "id1",
+                hash = "hash1",
+                syncStatus = SyncStatus.SYNCED,
+                lastAttemptTimestamp = System.currentTimeMillis()
+            )
         )
         syncStatusDao.insertSyncStatus(
-            SyncStatusEntity("id2", "hash2", SyncStatus.PENDING, System.currentTimeMillis(), 0, 0L, null)
+            SyncStatusEntity(
+                mediaId = "id2",
+                hash = "hash2",
+                syncStatus = SyncStatus.PENDING,
+                lastAttemptTimestamp = System.currentTimeMillis()
+            )
         )
         
         val failedCount = syncStatusDao.getFailedCount().first()
@@ -169,13 +203,28 @@ class SyncStatusDaoTest {
     @Test
     fun getPendingCount_returnsCorrectCount() = runBlocking {
         syncStatusDao.insertSyncStatus(
-            SyncStatusEntity("id1", "hash1", SyncStatus.PENDING, System.currentTimeMillis(), 0, 0L, null)
+            SyncStatusEntity(
+                mediaId = "id1",
+                hash = "hash1",
+                syncStatus = SyncStatus.PENDING,
+                lastAttemptTimestamp = System.currentTimeMillis()
+            )
         )
         syncStatusDao.insertSyncStatus(
-            SyncStatusEntity("id2", "hash2", SyncStatus.PENDING, System.currentTimeMillis(), 0, 0L, null)
+            SyncStatusEntity(
+                mediaId = "id2",
+                hash = "hash2",
+                syncStatus = SyncStatus.PENDING,
+                lastAttemptTimestamp = System.currentTimeMillis()
+            )
         )
         syncStatusDao.insertSyncStatus(
-            SyncStatusEntity("id3", "hash3", SyncStatus.SYNCED, System.currentTimeMillis(), 0, 0L, null)
+            SyncStatusEntity(
+                mediaId = "id3",
+                hash = "hash3",
+                syncStatus = SyncStatus.SYNCED,
+                lastAttemptTimestamp = System.currentTimeMillis()
+            )
         )
         
         val pendingCount = syncStatusDao.getPendingCount().first()

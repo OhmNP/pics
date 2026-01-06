@@ -20,6 +20,11 @@ class SyncWorker(
         
         val settings = SettingsManager(applicationContext)
         
+        if (!settings.autoSyncEnabled) {
+            Log.i(TAG, "Auto-sync disabled, worker exiting")
+            return Result.success()
+        }
+        
         // 1. Manual Battery Threshold Check
         val batteryThreshold = settings.batteryThreshold
         if (!isCharging(applicationContext)) {
